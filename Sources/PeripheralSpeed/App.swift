@@ -152,6 +152,7 @@ struct MenuContent: View {
                     ForEach(0..<freeUSBCCount, id: \.self) { _ in
                         DeviceRow(dot: .gray, title: "USB-C — free",
                                   subtitle: "fits a drive at ≈ 2–3 GB/s", advice: nil)
+                            .help("Marketed as 40 Gb/s (Thunderbolt / USB4) — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                     }
 
                     ForEach(usbABlocks) { b in
@@ -170,10 +171,11 @@ struct MenuContent: View {
                         }
                     }
                     ForEach(0..<freeUSBACount, id: \.self) { _ in
-                        let g = Double(scanner.result.inventory?.usbAGbps ?? 5) * 1_000
+                        let gbits = scanner.result.inventory?.usbAGbps ?? 5
                         DeviceRow(dot: .gray, title: "USB-A — free",
-                                  subtitle: "fits a drive at ≈ \(Speed.gbCopy(linkMbps: g))",
+                                  subtitle: "fits a drive at ≈ \(Speed.gbCopy(linkMbps: Double(gbits) * 1_000))",
                                   advice: nil)
+                            .help("Marketed as \(gbits) Gb/s — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                     }
                 }
 
