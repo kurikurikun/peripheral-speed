@@ -59,8 +59,11 @@ struct MenuContent: View {
 
     /// An Apple display/dock announces itself as generically named Apple hubs
     /// at the top of the USB tree — plumbing, not something the user plugged in.
+    /// Must arrive over the Thunderbolt-tunneled controller: a hub on a Mac
+    /// port stays a real hub even if Apple made it.
     private func isDisplayInternalHub(_ d: USBDevice) -> Bool {
-        guard tbDisplayName != nil, d.isHub, d.depth == 0 else { return false }
+        guard tbDisplayName != nil, d.isHub, d.depth == 0,
+              d.bus == .thunderbolt || d.bus == .unknown else { return false }
         return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
             && d.name.localizedCaseInsensitiveContains("hub")
     }
@@ -74,6 +77,35 @@ struct MenuContent: View {
 
     private var displayBlocks: [USBBlock] { blocks.filter { isDisplayInternalHub($0.root) } }
     private var macBlocks: [USBBlock] { blocks.filter { !isDisplayInternalHub($0.root) } }
+
+    private var usbABlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .usbA } }
+    private var usbCBlocks: [USBBlock] { macBlocks.filter { $0.root.bus != .usbA } }
+
+    /// Empty TB buses minus USB-C ports occupied by USB-mode devices the
+    /// TB report can't see (one controller == one physical port).
+    private var freeUSBCCount: Int {
+        let emptyTB = scanner.result.tbPorts.filter { $0.deviceNames.isEmpty }.count
+        let usbModePorts = Set(usbCBlocks.filter { $0.root.bus == .usbC }
+            .map(\.root.controllerID)).count
+        return max(0, emptyTB - usbModePorts)
+    }
+
+    private var freeUSBACount: Int {
+        guard let inv = scanner.result.inventory else { return 0 }
+        return max(0, inv.usbA - usbABlocks.count)
+    }
+
+    /// Devices sharing a controller share a physical USB-C port — a hub's
+    /// USB2 side and a USB3 device behind it enumerate as siblings. Show
+    /// the first as the port; nest the rest under it.
+    private var usbCRows: [(block: USBBlock, first: Bool)] {
+        var seen = Set<Int>()
+        return usbCBlocks.map { b in
+            let first = !seen.contains(b.root.controllerID)
+            seen.insert(b.root.controllerID)
+            return (block: b, first: first)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -91,41 +123,65 @@ struct MenuContent: View {
             } else {
                 statusBanner
 
-                if !scanner.result.tbPorts.isEmpty || !macBlocks.isEmpty {
-                    section("On your Mac") {
-                        ForEach(Array(scanner.result.tbPorts.enumerated()), id: \.1.id) { i, p in
-                            if let name = p.deviceNames.first {
-                                DeviceRow(dot: color(p.verdict),
-                                          title: "USB-C \(i + 1) — \(name)",
-                                          subtitle: tbSubtitle(p),
-                                          advice: p.advice)
-                            } else {
-                                DeviceRow(dot: .gray,
-                                          title: "USB-C \(i + 1) — free",
-                                          subtitle: "up to 40 Gb/s",
-                                          advice: nil)
-                            }
-                        }
-                        ForEach(macBlocks) { b in
-                            DeviceRow(dot: dot(for: b.root),
-                                      title: b.root.name,
-                                      subtitle: usbSubtitle(b.root),
-                                      advice: b.root.advice)
-                                .help(b.root.speedLabel)
-                            ForEach(b.children) { d in
-                                DeviceRow(dot: dot(for: d),
-                                          title: d.name,
-                                          subtitle: usbSubtitle(d),
-                                          advice: d.advice,
-                                          indent: d.depth)
-                                    .help(d.speedLabel)
-                            }
-                        }
-                        Text("USB-C numbers are the system's own order, not left-to-right — unplug and replug to see which row is which port. Other ports (USB-A) only show up here while something is plugged in.")
-                            .font(.caption2).foregroundStyle(.secondary)
-                            .padding(.leading, 14)
-                            .fixedSize(horizontal: false, vertical: true)
+                section(macSectionTitle) {
+                    // USB-C / Thunderbolt: TB devices first, then USB-mode
+                    // devices plugged into a Mac USB-C port, then free ports.
+                    ForEach(scanner.result.tbPorts.filter { !$0.deviceNames.isEmpty }) { p in
+                        DeviceRow(dot: color(p.verdict),
+                                  title: "USB-C — \(p.deviceNames.first ?? "?")",
+                                  subtitle: tbSubtitle(p),
+                                  advice: p.advice)
                     }
+                    ForEach(usbCRows, id: \.block.id) { row in
+                        let extra = row.first ? 0 : 1
+                        DeviceRow(dot: dot(for: row.block.root),
+                                  title: row.first ? "USB-C — \(row.block.root.name)"
+                                                   : row.block.root.name,
+                                  subtitle: usbSubtitle(row.block.root),
+                                  advice: row.block.root.advice,
+                                  indent: extra)
+                            .help(row.block.root.speedLabel)
+                        ForEach(row.block.children) { d in
+                            DeviceRow(dot: dot(for: d),
+                                      title: d.name,
+                                      subtitle: usbSubtitle(d),
+                                      advice: d.advice,
+                                      indent: d.depth + extra)
+                                .help(d.speedLabel)
+                        }
+                    }
+                    ForEach(0..<freeUSBCCount, id: \.self) { _ in
+                        DeviceRow(dot: .gray, title: "USB-C — free",
+                                  subtitle: "up to 40 Gb/s", advice: nil)
+                    }
+
+                    ForEach(usbABlocks) { b in
+                        DeviceRow(dot: dot(for: b.root),
+                                  title: "USB-A — \(b.root.name)",
+                                  subtitle: usbSubtitle(b.root),
+                                  advice: b.root.advice)
+                            .help(b.root.speedLabel)
+                        ForEach(b.children) { d in
+                            DeviceRow(dot: dot(for: d),
+                                      title: d.name,
+                                      subtitle: usbSubtitle(d),
+                                      advice: d.advice,
+                                      indent: d.depth)
+                                .help(d.speedLabel)
+                        }
+                    }
+                    ForEach(0..<freeUSBACount, id: \.self) { _ in
+                        DeviceRow(dot: .gray, title: "USB-A — free",
+                                  subtitle: "up to \(scanner.result.inventory?.usbAGbps ?? 5) Gb/s",
+                                  advice: nil)
+                    }
+
+                    Text(scanner.result.inventory == nil
+                         ? "macOS can't say which physical port is which, and USB-A ports only show while something is plugged in."
+                         : "macOS can't say which physical port is which — unplug and replug to see which row changes.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .padding(.leading, 14)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if !displayBlocks.isEmpty {
@@ -145,7 +201,7 @@ struct MenuContent: View {
                                 .padding(.leading, 14)
                         }
                         if let uplink = displayBlocks.compactMap(\.root.speedMbps).max() {
-                            Text("Its own camera and speakers are internal and not listed. Everything on its ports shares one \(shortSpeed(uplink)) line back to the Mac.")
+                            Text("Everything on its ports shares one \(shortSpeed(uplink)) line back to the Mac.")
                                 .font(.caption2).foregroundStyle(.secondary)
                                 .padding(.leading, 14)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -171,6 +227,13 @@ struct MenuContent: View {
     }
 
     // MARK: - pieces
+
+    private var macSectionTitle: String {
+        guard let inv = scanner.result.inventory else { return "On your Mac" }
+        var parts = ["\(inv.usbC) × USB-C"]
+        if inv.usbA > 0 { parts.append("\(inv.usbA) × USB-A") }
+        return "On your \(inv.marketingName) — \(parts.joined(separator: ", "))"
+    }
 
     @ViewBuilder private var statusBanner: some View {
         let (text, icon, tint): (String, String, Color) = {

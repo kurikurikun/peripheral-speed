@@ -6,6 +6,34 @@ enum Verdict {
     case bad        // real bottleneck with a known fix
 }
 
+/// Which physical wiring a USB device entered the Mac through. On Apple
+/// Silicon each root controller class gives it away: the Fresco Logic
+/// controller drives the USB-A ports, AppleT####USBXHCI is a built-in
+/// USB-C port's USB side, and AppleUSBXHCITR is tunneled over Thunderbolt
+/// (i.e. behind a dock or display).
+enum USBBus {
+    case usbA, usbC, thunderbolt, unknown
+}
+
+/// What ports a given Mac model physically has — macOS can't enumerate
+/// empty USB-A ports, but it does know what machine it is.
+struct PortInventory {
+    let marketingName: String
+    let usbC: Int       // USB-C / Thunderbolt ports
+    let usbA: Int
+    let usbAGbps: Int   // link speed the USB-A ports run at
+
+    static let known: [String: PortInventory] = [
+        "Macmini9,1": .init(marketingName: "Mac mini (M1)", usbC: 2, usbA: 2, usbAGbps: 5),
+        "Mac14,3": .init(marketingName: "Mac mini (M2)", usbC: 2, usbA: 2, usbAGbps: 5),
+        "Mac14,12": .init(marketingName: "Mac mini (M2 Pro)", usbC: 4, usbA: 2, usbAGbps: 5),
+        "Mac16,10": .init(marketingName: "Mac mini (M4)", usbC: 5, usbA: 0, usbAGbps: 0),
+        "Mac16,11": .init(marketingName: "Mac mini (M4 Pro)", usbC: 5, usbA: 0, usbAGbps: 0),
+        "Mac13,1": .init(marketingName: "Mac Studio (M1 Max)", usbC: 6, usbA: 2, usbAGbps: 10),
+        "Mac13,2": .init(marketingName: "Mac Studio (M1 Ultra)", usbC: 6, usbA: 2, usbAGbps: 10),
+    ]
+}
+
 struct USBDevice: Identifiable {
     let id = UUID()
     let name: String
@@ -17,6 +45,11 @@ struct USBDevice: Identifiable {
     /// hops from a physical Mac port: 0 = plugged straight into the Mac,
     /// 1 = plugged into a hub/dock/display, 2 = hub behind a hub, …
     var depth: Int = 0
+    var bus: USBBus = .unknown
+    /// index of the root controller this device hangs off — on Apple
+    /// Silicon one USB-C controller == one physical port, so siblings
+    /// sharing a controllerID share a physical port.
+    var controllerID: Int = -1
 
     var verdict: Verdict {
         guard let mbps = speedMbps else { return .good }
@@ -59,7 +92,10 @@ struct TBPort: Identifiable {
 struct ScanResult {
     var usbDevices: [USBDevice] = []
     var tbPorts: [TBPort] = []
+    var modelId: String = ""
     var scannedAt: Date = .init()
+
+    var inventory: PortInventory? { PortInventory.known[modelId] }
 
     var bottlenecks: [String] {
         var out: [String] = []

@@ -37,6 +37,7 @@ final class PeripheralScanner: ObservableObject {
             var r = ScanResult()
             r.usbDevices = self.scanUSB()
             r.tbPorts = self.scanThunderbolt()
+            r.modelId = Self.modelIdentifier()
             DispatchQueue.main.async {
                 self.result = r
                 self.scanning = false
@@ -106,7 +107,7 @@ final class PeripheralScanner: ObservableObject {
 
         // DFS keeps a device right after the hub it hangs off; depth counts
         // device-node ancestors, so depth 0 = a physical Mac port.
-        func visit(_ n: [String: Any], depth: Int) {
+        func visit(_ n: [String: Any], depth: Int, bus: USBBus, controller: Int) {
             var speed: (Double, String)? = nil
             if let code = n["USBSpeed"] as? Int {
                 speed = Self.hostSpeeds[code]
@@ -128,15 +129,39 @@ final class PeripheralScanner: ObservableObject {
                     speedLabel: speed.1,
                     isStorage: storage,
                     isHub: hub,
-                    depth: depth))
+                    depth: depth,
+                    bus: bus,
+                    controllerID: controller))
                 childDepth = depth + 1
             }
             for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
-                visit(c, depth: childDepth)
+                visit(c, depth: childDepth, bus: bus, controller: controller)
             }
         }
-        visit(root, depth: 0)
+        // Root children are the host controllers; their class names say
+        // which physical wiring they serve (see USBBus).
+        let controllers = root["IORegistryEntryChildren"] as? [[String: Any]] ?? []
+        for (i, c) in controllers.enumerated() {
+            let cls = (c["IOObjectClass"] as? String) ?? ""
+            visit(c, depth: 0, bus: Self.busKind(cls), controller: i)
+        }
         return devices
+    }
+
+    static func busKind(_ controllerClass: String) -> USBBus {
+        if controllerClass.contains("XHCITR") { return .thunderbolt }
+        if controllerClass.contains("EmbeddedUSBXHCIFL") { return .usbA }
+        if controllerClass.contains("USBXHCI") { return .usbC }
+        return .unknown
+    }
+
+    static func modelIdentifier() -> String {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        guard size > 0 else { return "" }
+        var buf = [CChar](repeating: 0, count: size)
+        sysctlbyname("hw.model", &buf, &size, nil, 0)
+        return String(cString: buf)
     }
 
     // MARK: - Thunderbolt via system_profiler
