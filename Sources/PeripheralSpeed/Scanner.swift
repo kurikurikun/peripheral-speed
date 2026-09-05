@@ -108,6 +108,44 @@ final class PeripheralScanner: ObservableObject {
         }
     }
 
+    /// Plain-text hardware fingerprint for debugging a Mac we've never
+    /// seen: app/OS/model, every root USB controller with its device tree
+    /// (names, speeds, locationIDs — no serial numbers), and the TB buses.
+    func diagnosticReport() -> String {
+        var lines = ["PeripheralSpeed v\(AppInfo.version)",
+                     "Model: \(Self.modelIdentifier()) (\(result.inventory?.marketingName ?? "not in port database"))",
+                     "macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)",
+                     "", "USB controllers:"]
+        if let root = runPlist("/usr/sbin/ioreg", ["-p", "IOUSB", "-a", "-l"]) as? [String: Any] {
+            func walk(_ n: [String: Any], indent: Int) {
+                for k in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
+                    let name = (k["USB Product Name"] as? String)
+                        ?? (k["IORegistryEntryName"] as? String) ?? "?"
+                    let vendor = (k["USB Vendor Name"] as? String).map { " [\($0)]" } ?? ""
+                    let speed = (k["USBSpeed"] as? Int) ?? (k["Device Speed"] as? Int)
+                    let loc = k["locationID"] as? Int ?? 0
+                    lines.append(String(repeating: "  ", count: indent)
+                        + "\(name)\(vendor) speed=\(speed.map(String.init) ?? "-")"
+                        + String(format: " loc=0x%08x", loc))
+                    walk(k, indent: indent + 1)
+                }
+            }
+            for c in root["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
+                let loc = c["locationID"] as? Int ?? 0
+                lines.append("\(c["IOObjectClass"] as? String ?? "?")"
+                    + String(format: " loc=0x%08x", loc))
+                walk(c, indent: 1)
+            }
+        }
+        lines.append("")
+        lines.append("Thunderbolt buses:")
+        for p in result.tbPorts {
+            lines.append("  \(p.busName): \(p.speedText.isEmpty ? "-" : p.speedText)"
+                + " devices=[\(p.deviceNames.joined(separator: ", "))]")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - subprocess + plist helpers
 
     private func runPlist(_ path: String, _ args: [String]) -> Any? {

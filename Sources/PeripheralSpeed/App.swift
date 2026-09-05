@@ -30,6 +30,8 @@ struct PeripheralSpeedApp: App {
 /// displays, hub plumbing) keeps its place in the tree with no speed.
 struct MenuContent: View {
     @ObservedObject var scanner: PeripheralScanner
+    @State private var showAbout = false
+    @State private var diagCopied = false
 
     /// One top-level USB device plus everything hanging off it.
     private struct USBBlock: Identifiable {
@@ -287,11 +289,22 @@ struct MenuContent: View {
                 Spacer()
                 if scanner.scanning {
                     ProgressView().controlSize(.small)
-                        .help("Re-checking — runs by itself every 5 seconds")
+                        .help("Re-checking")
                 }
+                Button {
+                    showAbout.toggle()
+                    diagCopied = false
+                } label: {
+                    Image(systemName: showAbout ? "xmark.circle.fill" : "questionmark.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(showAbout ? "Back to the port list" : "About this app")
             }
 
-            if scanner.result.usbDevices.isEmpty && scanner.result.tbPorts.isEmpty {
+            if showAbout {
+                aboutView
+            } else if scanner.result.usbDevices.isEmpty && scanner.result.tbPorts.isEmpty {
                 Text("Scanning…").foregroundStyle(.secondary)
             } else {
                 statusBanner
@@ -394,6 +407,47 @@ struct MenuContent: View {
     }
 
     // MARK: - pieces
+
+    private var aboutView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Shows how fast data can move through this Mac's ports — and what's slowing it down.")
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Green dot: a drive at full speed. Gray: speed doesn't matter for that device.", systemImage: "circle.fill")
+                Label("Ejects a drive so it's safe to unplug.", systemImage: "eject.fill")
+                Label("Measures a drive's real speed with a short test file.", systemImage: "gauge")
+                Label("All numbers are real-world copy speeds in GB/s.", systemImage: "speedometer")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Divider()
+
+            Button {
+                copyDiagnostics()
+            } label: {
+                Label(diagCopied ? "Copied — ready to paste" : "Copy diagnostic info",
+                      systemImage: diagCopied ? "checkmark.circle.fill" : "doc.on.doc")
+            }
+            Text("Copies this Mac's port wiring details (device names only — nothing personal). If the port list ever looks wrong, copy this and send it to Chris.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Built with Claude Code · move-ment · 2026")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func copyDiagnostics() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let report = scanner.diagnosticReport()
+            DispatchQueue.main.async {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(report, forType: .string)
+                diagCopied = true
+            }
+        }
+    }
 
     private var macSectionTitle: String {
         guard let inv = scanner.result.inventory else { return "On your Mac" }
