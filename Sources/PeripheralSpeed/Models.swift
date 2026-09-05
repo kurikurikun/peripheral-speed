@@ -14,6 +14,9 @@ struct USBDevice: Identifiable {
     let speedLabel: String
     let isStorage: Bool
     let isHub: Bool
+    /// hops from a physical Mac port: 0 = plugged straight into the Mac,
+    /// 1 = plugged into a hub/dock/display, 2 = hub behind a hub, …
+    var depth: Int = 0
 
     var verdict: Verdict {
         guard let mbps = speedMbps else { return .good }

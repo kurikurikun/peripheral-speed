@@ -104,13 +104,16 @@ final class PeripheralScanner: ObservableObject {
             return false
         }
 
-        func visit(_ n: [String: Any]) {
+        // DFS keeps a device right after the hub it hangs off; depth counts
+        // device-node ancestors, so depth 0 = a physical Mac port.
+        func visit(_ n: [String: Any], depth: Int) {
             var speed: (Double, String)? = nil
             if let code = n["USBSpeed"] as? Int {
                 speed = Self.hostSpeeds[code]
             } else if let code = n["Device Speed"] as? Int {
                 speed = Self.legacySpeeds[code]
             }
+            var childDepth = depth
             if let speed {
                 let name = (n["USB Product Name"] as? String)
                     ?? (n["IORegistryEntryName"] as? String) ?? "?"
@@ -124,11 +127,15 @@ final class PeripheralScanner: ObservableObject {
                     speedMbps: speed.0,
                     speedLabel: speed.1,
                     isStorage: storage,
-                    isHub: hub))
+                    isHub: hub,
+                    depth: depth))
+                childDepth = depth + 1
             }
-            for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] { visit(c) }
+            for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
+                visit(c, depth: childDepth)
+            }
         }
-        visit(root)
+        visit(root, depth: 0)
         return devices
     }
 
