@@ -41,7 +41,17 @@ struct PortInventory {
     /// false on Macs with no Thunderbolt at all (MacBook Neo) — free-port
     /// counting then can't lean on the Thunderbolt bus report.
     var hasThunderbolt: Bool = true
+    /// Per-port breakdown for machines whose USB-C ports are NOT equal,
+    /// named by physical position so the user knows which hole is which.
+    var usbCPorts: [USBCPort]? = nil
+}
 
+struct USBCPort {
+    let label: String     // physical position, e.g. "left"
+    let linkMbps: Double
+}
+
+extension PortInventory {
     static let known: [String: PortInventory] = {
         var t: [String: PortInventory] = [:]
         func add(_ ids: [String], _ inv: PortInventory) { for id in ids { t[id] = inv } }
@@ -58,9 +68,11 @@ struct PortInventory {
         add(["Mac17,4"], .init(marketingName: "MacBook Air 15″ (M5)", usbC: 2, usbA: 0, usbAGbps: 0))
 
         // MacBook Neo — no Thunderbolt; the two ports are NOT equal
+        // (Apple tech specs: left = USB 3 10 Gb/s, right = USB 2 480 Mb/s)
         add(["Mac17,5"], .init(marketingName: "MacBook Neo", usbC: 2, usbA: 0, usbAGbps: 0,
-            usbCLabel: "left port fits a drive at ≈ 1.0 GB/s · right only ≈ 0.05 GB/s",
-            hasThunderbolt: false))
+            hasThunderbolt: false,
+            usbCPorts: [USBCPort(label: "left", linkMbps: 10_000),
+                        USBCPort(label: "right", linkMbps: 480)]))
 
         // MacBook Pro
         add(["MacBookPro17,1"], .init(marketingName: "MacBook Pro 13″ (M1)", usbC: 2, usbA: 0, usbAGbps: 0))

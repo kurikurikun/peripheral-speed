@@ -111,6 +111,44 @@ struct MenuContent: View {
         return max(0, inv.usbA - usbABlocks.count)
     }
 
+    /// On machines with unequal USB-C ports (MacBook Neo), name each free
+    /// port by position. Occupied ports are retired from the pool by a
+    /// speed argument: a device faster than 480 Mb/s can only be on a
+    /// fast port; a slow device is assumed to sit on the slowest port.
+    private var freeUSBCPortRows: [(title: String, subtitle: String)]? {
+        guard let inv = scanner.result.inventory,
+              let ports = inv.usbCPorts, !inv.hasThunderbolt else { return nil }
+        var pool = ports.sorted { $0.linkMbps > $1.linkMbps }
+        let occupiedSpeeds = Dictionary(grouping: usbCBlocks.filter { $0.root.bus == .usbC },
+                                        by: \.root.controllerID)
+            .values.map { blocks in
+                blocks.flatMap { [$0.root] + $0.children }.compactMap(\.speedMbps).max() ?? 0
+            }
+        for speed in occupiedSpeeds.sorted(by: >) where !pool.isEmpty {
+            if speed > 480, let i = pool.firstIndex(where: { $0.linkMbps > 480 }) {
+                pool.remove(at: i)
+            } else {
+                pool.removeLast()
+            }
+        }
+        return pool.map { p in
+            p.linkMbps > 480
+                ? ("USB-C \(p.label) — free", "fits a drive at ≈ \(Speed.gbCopy(linkMbps: p.linkMbps))")
+                : ("USB-C \(p.label) — free", "only ≈ \(Speed.gbCopy(linkMbps: p.linkMbps)) — not for drives")
+        }
+    }
+
+    /// Model-aware upgrade of a drive's advice: on a Neo a USB-2-speed
+    /// drive is most likely just in the wrong port.
+    private func adviceFor(_ d: USBDevice) -> String? {
+        if d.isStorage, d.verdict == .bad, d.bus == .usbC,
+           let ports = scanner.result.inventory?.usbCPorts,
+           let fast = ports.max(by: { $0.linkMbps < $1.linkMbps }) {
+            return "Stuck at ≈ 0.05 GB/s. Move it to the \(fast.label) port — the other one is USB-2 only. If it's already there, swap the cable."
+        }
+        return d.advice
+    }
+
     private var drives: [USBDevice] { scanner.result.usbDevices.filter(\.isStorage) }
 
     /// Port hops from a locationID (top byte = bus, then a nibble per hop).
@@ -186,24 +224,31 @@ struct MenuContent: View {
                                   title: row.first ? "USB-C — \(row.block.root.name)"
                                                    : row.block.root.name,
                                   subtitle: subtitle(row.block.root),
-                                  advice: row.block.root.advice,
+                                  advice: adviceFor(row.block.root),
                                   indent: extra)
                             .help(row.block.root.speedLabel)
                         ForEach(row.block.children) { d in
                             DeviceRow(dot: dot(for: d),
                                       title: d.name,
                                       subtitle: subtitle(d),
-                                      advice: d.advice,
+                                      advice: adviceFor(d),
                                       indent: d.depth + extra)
                                 .help(d.speedLabel)
                         }
                     }
-                    ForEach(0..<freeUSBCCount, id: \.self) { _ in
-                        DeviceRow(dot: .gray, title: "USB-C — free",
-                                  subtitle: scanner.result.inventory?.usbCLabel
-                                            ?? "fits a drive at ≈ 2–3 GB/s",
-                                  advice: nil)
-                            .help("Marketed as 40 Gb/s (Thunderbolt / USB4) — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
+                    if let portRows = freeUSBCPortRows {
+                        ForEach(portRows, id: \.title) { row in
+                            DeviceRow(dot: .gray, title: row.title,
+                                      subtitle: row.subtitle, advice: nil)
+                        }
+                    } else {
+                        ForEach(0..<freeUSBCCount, id: \.self) { _ in
+                            DeviceRow(dot: .gray, title: "USB-C — free",
+                                      subtitle: scanner.result.inventory?.usbCLabel
+                                                ?? "fits a drive at ≈ 2–3 GB/s",
+                                      advice: nil)
+                                .help("Marketed as 40 Gb/s (Thunderbolt / USB4) — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
+                        }
                     }
 
                     ForEach(usbABlocks) { b in
