@@ -326,7 +326,7 @@ struct MenuContent: View {
             HStack {
                 Button("Rescan") { scanner.scan() }
                 Spacer()
-                Text("checks itself every 5 s").font(.caption2)
+                Text("updates when devices change").font(.caption2)
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }

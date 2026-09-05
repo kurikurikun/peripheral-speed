@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 
 /// Reads USB devices from the IOKit registry (via ioreg) and Thunderbolt
 /// ports via system_profiler — the exact plumbing the speedcheck.py
@@ -20,6 +21,9 @@ final class PeripheralScanner: ObservableObject {
     @Published var testErrors: [Int: String] = [:]
 
     private var timer: Timer?
+    private var notifyPort: IONotificationPortRef?
+    private var iterators: [io_iterator_t] = []
+    private var debounce: DispatchWorkItem?
 
     // ioreg speed codes -> (Mb/s, label). Two families, two maps.
     private static let hostSpeeds: [Int: (Double, String)] = [
@@ -33,11 +37,53 @@ final class PeripheralScanner: ObservableObject {
         4: (10_000, "USB 3 — 10 Gb/s"), 5: (20_000, "USB 3 — 20 Gb/s"),
     ]
 
+    /// Called on every menu open: rescan immediately, and (once) arm
+    /// IOKit attach/detach notifications so scans otherwise run only when
+    /// hardware actually changes. A slow timer is kept as a safety net
+    /// for anything the USB notifications can't see.
     func start() {
         scan()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.scan()
+        armNotifications()
+        if timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                self?.scan()
+            }
         }
+    }
+
+    private func armNotifications() {
+        guard notifyPort == nil,
+              let port = IONotificationPortCreate(kIOMainPortDefault) else { return }
+        notifyPort = port
+        IONotificationPortSetDispatchQueue(port, .main)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let callback: IOServiceMatchingCallback = { refcon, iterator in
+            var obj = IOIteratorNext(iterator)
+            while obj != 0 { IOObjectRelease(obj); obj = IOIteratorNext(iterator) }
+            guard let refcon else { return }
+            Unmanaged<PeripheralScanner>.fromOpaque(refcon)
+                .takeUnretainedValue().deviceEvent()
+        }
+        for kind in [kIOFirstMatchNotification, kIOTerminatedNotification] {
+            var iter: io_iterator_t = 0
+            if IOServiceAddMatchingNotification(port, kind,
+                                                IOServiceMatching("IOUSBHostDevice"),
+                                                callback, refcon, &iter) == KERN_SUCCESS {
+                // drain to arm the notification
+                var obj = IOIteratorNext(iter)
+                while obj != 0 { IOObjectRelease(obj); obj = IOIteratorNext(iter) }
+                iterators.append(iter)
+            }
+        }
+    }
+
+    /// Devices settle in bursts (a hub brings several children) — collapse
+    /// them into one scan a moment after the last event.
+    private func deviceEvent() {
+        debounce?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.scan() }
+        debounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
     func scan() {
