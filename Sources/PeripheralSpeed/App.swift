@@ -23,17 +23,33 @@ struct PeripheralSpeedApp: App {
     }
 }
 
-/// The app answers one question: how fast can data copy right now?
-/// So the menu shows drives, free ports a drive could go in, and problems.
-/// Chargers, displays, hubs and other non-drive gear are scanned in the
-/// background but only surface when they slow a drive down.
+/// Layout: the physical hierarchy (the Mac's ports, then the display's),
+/// because that's how the user finds things on their desk. Numbers: only
+/// where data can actually flow — drives get a GB/s copy speed, free ports
+/// get what a drive would do there, and everything else (chargers,
+/// displays, hub plumbing) keeps its place in the tree with no speed.
 struct MenuContent: View {
     @ObservedObject var scanner: PeripheralScanner
 
-    private var drives: [USBDevice] { scanner.result.usbDevices.filter(\.isStorage) }
+    /// One top-level USB device plus everything hanging off it.
+    private struct USBBlock: Identifiable {
+        let root: USBDevice
+        var children: [USBDevice] = []
+        var id: UUID { root.id }
+    }
 
-    /// Name of a display attached over Thunderbolt, for locating drives
-    /// plugged into its ports.
+    private var blocks: [USBBlock] {
+        var out: [USBBlock] = []
+        for d in scanner.result.usbDevices {
+            if d.depth == 0 || out.isEmpty {
+                out.append(USBBlock(root: d))
+            } else {
+                out[out.count - 1].children.append(d)
+            }
+        }
+        return out
+    }
+
     private var tbDisplayName: String? {
         scanner.result.tbPorts
             .compactMap { $0.deviceNames.first }
@@ -44,29 +60,53 @@ struct MenuContent: View {
         (tbDisplayName ?? "display").replacingOccurrences(of: "Apple Inc. ", with: "")
     }
 
+    /// An Apple display announces itself as generically named Apple hubs on
+    /// the Thunderbolt-tunneled controller — plumbing, not user gear.
+    private func isDisplayInternalHub(_ d: USBDevice) -> Bool {
+        guard tbDisplayName != nil, d.isHub, d.depth == 0,
+              d.bus == .thunderbolt || d.bus == .unknown else { return false }
+        return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
+            && d.name.localizedCaseInsensitiveContains("hub")
+    }
+
+    /// The display's camera/speakers enumerate as a USB device named after
+    /// the display itself — internal, not a port anyone can use.
+    private func isDisplayBuiltin(_ d: USBDevice) -> Bool {
+        tbDisplayName != nil && !d.isHub && !d.isStorage
+            && d.name.localizedCaseInsensitiveContains("display")
+    }
+
+    private var displayBlocks: [USBBlock] { blocks.filter { isDisplayInternalHub($0.root) } }
+    private var macBlocks: [USBBlock] { blocks.filter { !isDisplayInternalHub($0.root) } }
+    private var usbABlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .usbA } }
+    private var usbCBlocks: [USBBlock] { macBlocks.filter { $0.root.bus != .usbA } }
+
+    /// Devices sharing a controller share a physical USB-C port — show the
+    /// first as the port, nest the rest under it.
+    private var usbCRows: [(block: USBBlock, first: Bool)] {
+        var seen = Set<Int>()
+        return usbCBlocks.map { b in
+            let first = !seen.contains(b.root.controllerID)
+            seen.insert(b.root.controllerID)
+            return (block: b, first: first)
+        }
+    }
+
     /// Empty TB buses minus USB-C ports occupied by USB-mode devices the
     /// TB report can't see (one controller == one physical port).
     private var freeUSBCCount: Int {
         let emptyTB = scanner.result.tbPorts.filter { $0.deviceNames.isEmpty }.count
-        let usbModePorts = Set(scanner.result.usbDevices
-            .filter { $0.bus == .usbC && $0.depth == 0 }
-            .map(\.controllerID)).count
+        let usbModePorts = Set(usbCBlocks.filter { $0.root.bus == .usbC }
+            .map(\.root.controllerID)).count
         return max(0, emptyTB - usbModePorts)
     }
 
     private var freeUSBACount: Int {
         guard let inv = scanner.result.inventory else { return 0 }
-        let occupied = Set(scanner.result.usbDevices
-            .filter { $0.bus == .usbA && $0.depth == 0 }
-            .map(\.id)).count
-        return max(0, inv.usbA - occupied)
+        return max(0, inv.usbA - usbABlocks.count)
     }
 
-    /// Degraded links that aren't drives (e.g. a dock negotiating 20 Gb/s
-    /// on a 40 Gb/s port) still deserve a row — they cap any drive behind them.
-    private var slowTBPorts: [TBPort] {
-        scanner.result.tbPorts.filter { $0.verdict != .good }
-    }
+    private var drives: [USBDevice] { scanner.result.usbDevices.filter(\.isStorage) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -84,52 +124,85 @@ struct MenuContent: View {
             } else {
                 statusBanner
 
-                section("Drives") {
-                    if drives.isEmpty {
-                        Text("None connected — plug one in and it shows up here")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .padding(.leading, 14)
+                section(macSectionTitle) {
+                    ForEach(scanner.result.tbPorts.filter { !$0.deviceNames.isEmpty }) { p in
+                        DeviceRow(dot: p.verdict == .good ? .gray : color(p.verdict),
+                                  title: "USB-C — \(p.deviceNames.first ?? "?")",
+                                  subtitle: tbSubtitle(p),
+                                  advice: p.advice)
                     }
-                    ForEach(drives) { d in
-                        DeviceRow(dot: color(d.verdict),
-                                  title: d.name,
-                                  subtitle: driveSubtitle(d),
-                                  advice: d.advice)
-                            .help(d.speedLabel)
+                    ForEach(usbCRows, id: \.block.id) { row in
+                        let extra = row.first ? 0 : 1
+                        DeviceRow(dot: dot(for: row.block.root),
+                                  title: row.first ? "USB-C — \(row.block.root.name)"
+                                                   : row.block.root.name,
+                                  subtitle: subtitle(row.block.root),
+                                  advice: row.block.root.advice,
+                                  indent: extra)
+                            .help(row.block.root.speedLabel)
+                        ForEach(row.block.children) { d in
+                            DeviceRow(dot: dot(for: d),
+                                      title: d.name,
+                                      subtitle: subtitle(d),
+                                      advice: d.advice,
+                                      indent: d.depth + extra)
+                                .help(d.speedLabel)
+                        }
+                    }
+                    ForEach(0..<freeUSBCCount, id: \.self) { _ in
+                        DeviceRow(dot: .gray, title: "USB-C — free",
+                                  subtitle: "fits a drive at ≈ 2–3 GB/s", advice: nil)
+                    }
+
+                    ForEach(usbABlocks) { b in
+                        DeviceRow(dot: dot(for: b.root),
+                                  title: "USB-A — \(b.root.name)",
+                                  subtitle: subtitle(b.root),
+                                  advice: b.root.advice)
+                            .help(b.root.speedLabel)
+                        ForEach(b.children) { d in
+                            DeviceRow(dot: dot(for: d),
+                                      title: d.name,
+                                      subtitle: subtitle(d),
+                                      advice: d.advice,
+                                      indent: d.depth)
+                                .help(d.speedLabel)
+                        }
+                    }
+                    ForEach(0..<freeUSBACount, id: \.self) { _ in
+                        let g = Double(scanner.result.inventory?.usbAGbps ?? 5) * 1_000
+                        DeviceRow(dot: .gray, title: "USB-A — free",
+                                  subtitle: "fits a drive at ≈ \(Speed.gbCopy(linkMbps: g))",
+                                  advice: nil)
                     }
                 }
 
-                if freeUSBCCount > 0 || freeUSBACount > 0 {
-                    section("Free ports for a drive") {
-                        ForEach(0..<freeUSBCCount, id: \.self) { _ in
-                            DeviceRow(dot: .gray, title: "USB-C",
-                                      subtitle: "fastest — a good SSD copies ≈ 2–3 GB/s",
-                                      advice: nil)
+                if !displayBlocks.isEmpty {
+                    section("On your \(displayShortName)") {
+                        let plugged = displayBlocks.flatMap(\.children).filter { !isDisplayBuiltin($0) }
+                        ForEach(plugged) { d in
+                            DeviceRow(dot: dot(for: d),
+                                      title: d.name,
+                                      subtitle: subtitle(d),
+                                      advice: d.advice,
+                                      indent: max(0, d.depth - 1))
+                                .help(d.speedLabel)
                         }
-                        ForEach(0..<freeUSBACount, id: \.self) { _ in
-                            let g = scanner.result.inventory?.usbAGbps ?? 5
-                            DeviceRow(dot: .gray, title: "USB-A",
-                                      subtitle: "a drive here tops out ≈ \(Speed.gbCopy(linkMbps: Double(g) * 1_000))",
-                                      advice: nil)
+                        if plugged.isEmpty {
+                            Text("Nothing plugged into its ports right now")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .padding(.leading, 14)
+                        }
+                        // The shared uplink only matters when a drive rides it.
+                        if plugged.contains(where: \.isStorage),
+                           let uplink = displayBlocks.compactMap(\.root.speedMbps).max() {
+                            Text("Drives on the display share ≈ \(Speed.gbCopy(linkMbps: uplink)) back to the Mac.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .padding(.leading, 14)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
-
-                if !slowTBPorts.isEmpty {
-                    section("Slow links") {
-                        ForEach(slowTBPorts) { p in
-                            DeviceRow(dot: color(p.verdict),
-                                      title: p.deviceNames.first ?? p.busName,
-                                      subtitle: "caps drives at ≈ \(Speed.gbCopy(linkMbps: (p.gbps ?? 0) * 1_000))",
-                                      advice: p.advice)
-                                .help(p.speedText)
-                        }
-                    }
-                }
-
-                Text("Chargers, displays and hubs are checked too, but only shown if they slow a drive down.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
@@ -149,6 +222,13 @@ struct MenuContent: View {
     }
 
     // MARK: - pieces
+
+    private var macSectionTitle: String {
+        guard let inv = scanner.result.inventory else { return "On your Mac" }
+        var parts = ["\(inv.usbC) × USB-C"]
+        if inv.usbA > 0 { parts.append("\(inv.usbA) × USB-A") }
+        return "On your \(inv.marketingName) — \(parts.joined(separator: ", "))"
+    }
 
     @ViewBuilder private var statusBanner: some View {
         let (text, icon, tint): (String, String, Color) = {
@@ -183,29 +263,23 @@ struct MenuContent: View {
         }
     }
 
-    /// The number that matters (real-world copy speed) plus where the
-    /// drive is plugged in.
-    private func driveSubtitle(_ d: USBDevice) -> String {
-        guard let mbps = d.speedMbps else { return d.speedLabel }
-        let speed = "≈ \(Speed.gbCopy(linkMbps: mbps))"
-        if let loc = location(d) { return "\(speed) · \(loc)" }
-        return speed
+    /// Speed only where data can flow: drives get their real-world copy
+    /// speed; everything else is just a name in the tree.
+    private func subtitle(_ d: USBDevice) -> String {
+        guard d.isStorage, let mbps = d.speedMbps else { return "" }
+        return "≈ \(Speed.gbCopy(linkMbps: mbps))"
     }
 
-    private func location(_ d: USBDevice) -> String? {
-        switch d.bus {
-        case .usbA:
-            return d.depth > 0 ? "USB-A, via hub" : "USB-A port"
-        case .usbC:
-            let viaHub = d.depth > 0 || scanner.result.usbDevices.contains {
-                $0.controllerID == d.controllerID && $0.isHub && $0.id != d.id
-            }
-            return viaHub ? "USB-C, via hub" : "USB-C port"
-        case .thunderbolt:
-            return tbDisplayName != nil ? "on your \(displayShortName)" : "via Thunderbolt"
-        case .unknown:
-            return nil
-        }
+    private func tbSubtitle(_ p: TBPort) -> String {
+        guard p.verdict != .good, let g = p.gbps else { return "" }
+        return "caps drives at ≈ \(Speed.gbCopy(linkMbps: g * 1_000))"
+    }
+
+    /// Green is reserved for drives at full speed; gray means "fine, and
+    /// speed doesn't apply"; yellow/red mark real slowdowns.
+    private func dot(for d: USBDevice) -> Color {
+        if d.verdict == .good && !d.isStorage { return .gray }
+        return color(d.verdict)
     }
 
     private func color(_ v: Verdict) -> Color {
@@ -222,20 +296,28 @@ struct DeviceRow: View {
     let title: String
     let subtitle: String
     let advice: String?
+    var indent: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
+                if indent > 0 {
+                    Text("└")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .padding(.leading, CGFloat(indent) * 14)
+                }
                 Circle().fill(dot).frame(width: 8, height: 8)
                 Text(title).font(.system(.body, design: .rounded))
                 Spacer()
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
             }
             if let advice {
                 Text(advice)
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .padding(.leading, 14)
+                    .padding(.leading, CGFloat(indent + 1) * 14)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
