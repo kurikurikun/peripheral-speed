@@ -103,27 +103,32 @@ final class PeripheralScanner: ObservableObject {
         return locs
     }
 
-    /// locationID -> whole-disk BSD name, via each USB device's IOService
-    /// subtree (the IOMedia node lives there, not in the IOUSB plane).
-    /// The walk stops at nested USB devices so a hub never claims the
-    /// disk of a drive plugged into it.
+    /// locationID -> whole-disk BSD name, via the USB devices' IOService
+    /// subtrees (the IOMedia node lives there, not in the IOUSB plane).
+    /// ioreg nests a drive inside its hub's subtree, so the walk descends
+    /// through nested USB devices and credits each disk to the INNERMOST
+    /// device above it — a hub never claims a plugged-in drive's disk.
     private func bsdNames() -> [Int: String] {
         var map: [Int: String] = [:]
         guard let trees = runPlist("/usr/sbin/ioreg",
                                    ["-c", "IOUSBHostDevice", "-a", "-r", "-l"])
                 as? [[String: Any]] else { return map }
-        for tree in trees {
-            guard let loc = tree["locationID"] as? Int else { continue }
-            func find(_ n: [String: Any], isRoot: Bool) -> String? {
-                if !isRoot, (n["IOObjectClass"] as? String) == "IOUSBHostDevice" { return nil }
-                if n["Whole"] as? Bool == true, let bsd = n["BSD Name"] as? String { return bsd }
-                for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
-                    if let found = find(c, isRoot: false) { return found }
-                }
-                return nil
+        func walk(_ n: [String: Any], owner: Int?) {
+            var owner = owner
+            let cls = n["IOObjectClass"] as? String ?? ""
+            if cls == "IOUSBHostDevice" || cls == "IOUSBDevice",
+               let loc = n["locationID"] as? Int {
+                owner = loc
             }
-            if let bsd = find(tree, isRoot: true) { map[loc] = bsd }
+            if n["Whole"] as? Bool == true, let bsd = n["BSD Name"] as? String,
+               let owner, map[owner] == nil {
+                map[owner] = bsd
+            }
+            for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
+                walk(c, owner: owner)
+            }
         }
+        for tree in trees { walk(tree, owner: nil) }
         return map
     }
 
