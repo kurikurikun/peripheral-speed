@@ -38,6 +38,25 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep -s - "$APP"
+# Notarize when a Developer ID certificate and a notarytool keychain
+# profile ("peripheralspeed-notary") are present; ad-hoc sign otherwise.
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+PROFILE="peripheralspeed-notary"
+if [ -n "$IDENTITY" ] && xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+    echo "signing with: $IDENTITY"
+    codesign --force --options runtime --timestamp -s "$IDENTITY" "$APP"
+    ditto -c -k --keepParent "$APP" build/notarize.zip
+    echo "submitting to Apple notary service…"
+    xcrun notarytool submit build/notarize.zip --keychain-profile "$PROFILE" --wait
+    xcrun stapler staple "$APP"
+    rm build/notarize.zip
+    echo "notarized and stapled."
+else
+    echo "no Developer ID identity + notary profile — ad-hoc signing"
+    echo "(installs will need: xattr -dr com.apple.quarantine /Applications/PeripheralSpeed.app)"
+    codesign --force --deep -s - "$APP"
+fi
+
 ditto -c -k --keepParent "$APP" "build/PeripheralSpeed-$VERSION.zip"
 echo "built: build/PeripheralSpeed-$VERSION.zip"
