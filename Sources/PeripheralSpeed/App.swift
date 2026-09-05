@@ -197,8 +197,9 @@ struct MenuContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("Peripheral Speed").font(.headline)
+                Text(AppInfo.display).font(.caption2).foregroundStyle(.tertiary)
                 Spacer()
                 if scanner.scanning {
                     ProgressView().controlSize(.small)

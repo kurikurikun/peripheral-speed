@@ -1,5 +1,13 @@
 import Foundation
 
+/// Bump on every release the family might install; codename = what the
+/// release was about. Shown in the menu header and the shared zip name.
+enum AppInfo {
+    static let version = "0.4"
+    static let codename = "Neo"
+    static var display: String { "v\(version) · \(codename)" }
+}
+
 enum Verdict {
     case good       // healthy link
     case caution    // worth checking (e.g. 5 Gb/s drive that might be rated 10)
