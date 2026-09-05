@@ -60,13 +60,24 @@ struct MenuContent: View {
         (tbDisplayName ?? "display").replacingOccurrences(of: "Apple Inc. ", with: "")
     }
 
-    /// An Apple display announces itself as generically named Apple hubs —
-    /// plumbing, not user gear. On M1 they arrive on a controller class we
-    /// recognize as Thunderbolt-tunneled; newer silicon uses other class
-    /// names, so an Apple-vendor generic hub is accepted from any non-USB-A
-    /// bus while a Thunderbolt display is attached.
+    /// An Apple display announces itself as generically named Apple hubs on
+    /// the Thunderbolt-tunneled controller — plumbing, not user gear. The
+    /// bus check matters: M4-family minis carry an identical-looking Apple
+    /// hub pair on a plain USB-C controller, but that one is the FRONT
+    /// PORTS, not the display (see isFrontInternalHub).
     private func isDisplayInternalHub(_ d: USBDevice) -> Bool {
-        guard tbDisplayName != nil, d.isHub, d.depth == 0, d.bus != .usbA else { return false }
+        guard tbDisplayName != nil, d.isHub, d.depth == 0,
+              d.bus == .thunderbolt || d.bus == .unknown else { return false }
+        return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
+            && d.name.localizedCaseInsensitiveContains("hub")
+    }
+
+    /// On models with usbCFront > 0 the front USB-C ports live behind an
+    /// internal Apple hub pair on one non-tunneled controller.
+    private var frontPortCount: Int { scanner.result.inventory?.usbCFront ?? 0 }
+
+    private func isFrontInternalHub(_ d: USBDevice) -> Bool {
+        guard frontPortCount > 0, d.isHub, d.depth == 0, d.bus == .usbC else { return false }
         return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
             && d.name.localizedCaseInsensitiveContains("hub")
     }
@@ -79,7 +90,10 @@ struct MenuContent: View {
     }
 
     private var displayBlocks: [USBBlock] { blocks.filter { isDisplayInternalHub($0.root) } }
-    private var macBlocks: [USBBlock] { blocks.filter { !isDisplayInternalHub($0.root) } }
+    private var frontBlocks: [USBBlock] { blocks.filter { isFrontInternalHub($0.root) } }
+    private var macBlocks: [USBBlock] {
+        blocks.filter { !isDisplayInternalHub($0.root) && !isFrontInternalHub($0.root) }
+    }
     private var usbABlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .usbA } }
     private var usbCBlocks: [USBBlock] { macBlocks.filter { $0.root.bus != .usbA } }
 
@@ -94,22 +108,37 @@ struct MenuContent: View {
         }
     }
 
-    /// Free USB-C ports. With a known model, count from the inventory:
-    /// total ports minus occupied Thunderbolt buses minus ports occupied by
-    /// USB-mode devices (one controller == one physical port) — this also
-    /// covers non-Thunderbolt USB-C ports (Mac mini front ports, MacBook
-    /// Neo) that no report shows while empty. Unknown models fall back to
-    /// counting empty Thunderbolt buses.
+    /// Free rear/Thunderbolt USB-C ports: empty TB buses minus ports
+    /// occupied by USB-mode devices the TB report can't see (one
+    /// controller == one physical port; front ports are counted
+    /// separately). MacBook Neo has no TB report at all — count from the
+    /// model's known ports instead.
     private var freeUSBCCount: Int {
         let usbModePorts = Set(usbCBlocks.filter { $0.root.bus == .usbC }
             .map(\.root.controllerID)).count
-        if let inv = scanner.result.inventory {
-            let occupiedTB = scanner.result.tbPorts.filter { !$0.deviceNames.isEmpty }.count
-            return max(0, inv.usbC - occupiedTB - usbModePorts)
+        if let inv = scanner.result.inventory, !inv.hasThunderbolt {
+            return max(0, inv.usbC - usbModePorts)
         }
         let emptyTB = scanner.result.tbPorts.filter { $0.deviceNames.isEmpty }.count
         return max(0, emptyTB - usbModePorts)
     }
+
+    /// Physical front ports in use: children of the front internal hub
+    /// pair, deduplicated across its fast/slow planes by port number.
+    private var freeFrontCount: Int {
+        var ports = Set<Int>()
+        for b in frontBlocks {
+            let rc = portChain(b.root.locationID)
+            for d in b.children {
+                let dc = portChain(d.locationID)
+                if dc.count > rc.count { ports.insert(dc[rc.count]) }
+            }
+        }
+        return max(0, frontPortCount - ports.count)
+    }
+
+    /// "back" only when the model actually has separately listed front ports.
+    private var backTag: String { frontPortCount > 0 ? "USB-C back" : "USB-C" }
 
     private var freeUSBACount: Int {
         guard let inv = scanner.result.inventory else { return 0 }
@@ -209,25 +238,27 @@ struct MenuContent: View {
         return out
     }
 
-    /// Display rows with the dual-plane split healed: a USB 3 hub shows up
-    /// as a hub node on the slow plane while fast devices behind it attach
-    /// to the display's fast plane directly. Both planes number physical
-    /// ports the same way, so a fast device whose first port hop matches a
-    /// slow-plane hub's is physically behind that hub — nest it there.
-    private var displayRows: [(d: USBDevice, indent: Int)] {
+    /// Rows behind an internal Apple hub pair (a display's ports, or the
+    /// M4 mini's front ports), with the dual-plane split healed: a USB 3
+    /// hub shows up as a hub node on the slow plane while fast devices
+    /// behind it attach to the fast plane directly. Both planes number
+    /// physical ports the same way, so a fast device whose first port hop
+    /// matches a slow-plane hub's is physically behind that hub.
+    private func mergedHubRows(_ hubBlocks: [USBBlock],
+                               excluding: (USBDevice) -> Bool) -> [(d: USBDevice, indent: Int)] {
         func tail(_ d: USBDevice, root: USBDevice) -> [Int] {
             let rc = portChain(root.locationID), dc = portChain(d.locationID)
             return dc.count > rc.count ? Array(dc.dropFirst(rc.count)) : []
         }
-        let fastRoots = displayBlocks.filter { ($0.root.speedMbps ?? 0) >= 5_000 }
-        let slowRoots = displayBlocks.filter { ($0.root.speedMbps ?? 0) < 5_000 }
+        let fastRoots = hubBlocks.filter { ($0.root.speedMbps ?? 0) >= 5_000 }
+        let slowRoots = hubBlocks.filter { ($0.root.speedMbps ?? 0) < 5_000 }
         var fastItems = fastRoots.flatMap { b in
-            b.children.filter { !isDisplayBuiltin($0) }
+            b.children.filter { !excluding($0) }
                 .map { (d: $0, t: tail($0, root: b.root)) }
         }
         var rows: [(d: USBDevice, indent: Int)] = []
         for slow in slowRoots {
-            for d in slow.children where !isDisplayBuiltin(d) {
+            for d in slow.children where !excluding(d) {
                 rows.append((d, max(0, d.depth - 1)))
                 if d.isHub, let port = tail(d, root: slow.root).first {
                     let behind = fastItems.filter { $0.t.first == port }
@@ -238,6 +269,14 @@ struct MenuContent: View {
         }
         for f in fastItems { rows.append((f.d, max(0, f.d.depth - 1))) }
         return rows
+    }
+
+    private var displayRows: [(d: USBDevice, indent: Int)] {
+        mergedHubRows(displayBlocks, excluding: isDisplayBuiltin)
+    }
+
+    private var frontRows: [(d: USBDevice, indent: Int)] {
+        mergedHubRows(frontBlocks, excluding: { _ in false })
     }
 
     var body: some View {
@@ -260,14 +299,14 @@ struct MenuContent: View {
                 section(macSectionTitle) {
                     ForEach(scanner.result.tbPorts.filter { !$0.deviceNames.isEmpty }) { p in
                         DeviceRow(dot: p.verdict == .good ? .gray : color(p.verdict),
-                                  title: "USB-C — \(p.deviceNames.first ?? "?")",
+                                  title: "\(backTag) — \(p.deviceNames.first ?? "?")",
                                   subtitle: tbSubtitle(p),
                                   advice: p.advice)
                     }
                     ForEach(usbCRows, id: \.block.id) { row in
                         let extra = row.first ? 0 : 1
                         deviceRow(row.block.root,
-                                  title: row.first ? "USB-C — \(row.block.root.name)"
+                                  title: row.first ? "\(backTag) — \(row.block.root.name)"
                                                    : row.block.root.name,
                                   indent: extra)
                         ForEach(row.block.children) { d in
@@ -281,12 +320,23 @@ struct MenuContent: View {
                         }
                     } else {
                         ForEach(0..<freeUSBCCount, id: \.self) { _ in
-                            DeviceRow(dot: .gray, title: "USB-C — free",
+                            DeviceRow(dot: .gray, title: "\(backTag) — free",
                                       subtitle: scanner.result.inventory?.usbCLabel
                                                 ?? "≈ 2–3 GB/s",
                                       advice: nil)
                                 .help("Marketed as 40 Gb/s (Thunderbolt / USB4) — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                         }
+                    }
+
+                    ForEach(frontRows, id: \.d.id) { row in
+                        deviceRow(row.d,
+                                  title: row.indent == 0 ? "USB-C front — \(row.d.name)" : nil,
+                                  indent: row.indent)
+                    }
+                    ForEach(0..<freeFrontCount, id: \.self) { _ in
+                        DeviceRow(dot: .gray, title: "USB-C front — free",
+                                  subtitle: "≈ 1.0 GB/s", advice: nil)
+                            .help("Marketed as 10 Gb/s — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                     }
 
                     ForEach(usbABlocks) { b in
