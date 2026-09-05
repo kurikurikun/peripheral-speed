@@ -26,9 +26,54 @@ struct PeripheralSpeedApp: App {
 struct MenuContent: View {
     @ObservedObject var scanner: PeripheralScanner
 
-    private var hasNestedDevices: Bool {
-        scanner.result.usbDevices.contains { $0.depth > 0 }
+    /// One top-level USB device plus everything hanging off it.
+    private struct USBBlock: Identifiable {
+        let root: USBDevice
+        var children: [USBDevice] = []
+        var id: UUID { root.id }
     }
+
+    private var blocks: [USBBlock] {
+        var out: [USBBlock] = []
+        for d in scanner.result.usbDevices {
+            if d.depth == 0 || out.isEmpty {
+                out.append(USBBlock(root: d))
+            } else {
+                out[out.count - 1].children.append(d)
+            }
+        }
+        return out
+    }
+
+    /// Name of a display attached over Thunderbolt (e.g. "Apple Inc. Studio
+    /// Display"), used to claim its internal USB hubs.
+    private var tbDisplayName: String? {
+        scanner.result.tbPorts
+            .compactMap { $0.deviceNames.first }
+            .first { $0.localizedCaseInsensitiveContains("display") }
+    }
+
+    private var displayShortName: String {
+        (tbDisplayName ?? "display").replacingOccurrences(of: "Apple Inc. ", with: "")
+    }
+
+    /// An Apple display/dock announces itself as generically named Apple hubs
+    /// at the top of the USB tree — plumbing, not something the user plugged in.
+    private func isDisplayInternalHub(_ d: USBDevice) -> Bool {
+        guard tbDisplayName != nil, d.isHub, d.depth == 0 else { return false }
+        return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
+            && d.name.localizedCaseInsensitiveContains("hub")
+    }
+
+    /// The display's camera/speakers enumerate as a USB device named after
+    /// the display itself — internal, not a port anyone can unplug.
+    private func isDisplayBuiltin(_ d: USBDevice) -> Bool {
+        tbDisplayName != nil && !d.isHub && !d.isStorage
+            && d.name.localizedCaseInsensitiveContains("display")
+    }
+
+    private var displayBlocks: [USBBlock] { blocks.filter { isDisplayInternalHub($0.root) } }
+    private var macBlocks: [USBBlock] { blocks.filter { !isDisplayInternalHub($0.root) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -46,36 +91,61 @@ struct MenuContent: View {
             } else {
                 statusBanner
 
-                if !scanner.result.tbPorts.isEmpty {
-                    section("Your Mac's USB-C / Thunderbolt ports") {
-                        ForEach(scanner.result.tbPorts) { p in
+                if !scanner.result.tbPorts.isEmpty || !macBlocks.isEmpty {
+                    section("On your Mac") {
+                        ForEach(Array(scanner.result.tbPorts.enumerated()), id: \.1.id) { i, p in
                             if let name = p.deviceNames.first {
                                 DeviceRow(dot: color(p.verdict),
-                                          title: name,
+                                          title: "USB-C \(i + 1) — \(name)",
                                           subtitle: tbSubtitle(p),
                                           advice: p.advice)
                             } else {
                                 DeviceRow(dot: .gray,
-                                          title: "Nothing plugged in",
-                                          subtitle: "free port · up to 40 Gb/s",
+                                          title: "USB-C \(i + 1) — free",
+                                          subtitle: "up to 40 Gb/s",
                                           advice: nil)
                             }
                         }
+                        ForEach(macBlocks) { b in
+                            DeviceRow(dot: dot(for: b.root),
+                                      title: b.root.name,
+                                      subtitle: usbSubtitle(b.root),
+                                      advice: b.root.advice)
+                                .help(b.root.speedLabel)
+                            ForEach(b.children) { d in
+                                DeviceRow(dot: dot(for: d),
+                                          title: d.name,
+                                          subtitle: usbSubtitle(d),
+                                          advice: d.advice,
+                                          indent: d.depth)
+                                    .help(d.speedLabel)
+                            }
+                        }
+                        Text("USB-C numbers are the system's own order, not left-to-right — unplug and replug to see which row is which port. Other ports (USB-A) only show up here while something is plugged in.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .padding(.leading, 14)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
-                if !scanner.result.usbDevices.isEmpty {
-                    section("USB — what's plugged into what") {
-                        ForEach(scanner.result.usbDevices) { d in
+                if !displayBlocks.isEmpty {
+                    section("On your \(displayShortName)") {
+                        let plugged = displayBlocks.flatMap(\.children).filter { !isDisplayBuiltin($0) }
+                        ForEach(plugged) { d in
                             DeviceRow(dot: dot(for: d),
                                       title: d.name,
                                       subtitle: usbSubtitle(d),
                                       advice: d.advice,
-                                      indent: d.depth)
+                                      indent: max(0, d.depth - 1))
                                 .help(d.speedLabel)
                         }
-                        if hasNestedDevices {
-                            Text("Indented items are plugged into the hub, dock, or display above them. Empty ports on hubs and displays can't be seen — macOS only reports what's plugged in.")
+                        if plugged.isEmpty {
+                            Text("Nothing plugged into its ports right now")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .padding(.leading, 14)
+                        }
+                        if let uplink = displayBlocks.compactMap(\.root.speedMbps).max() {
+                            Text("Its own camera and speakers are internal and not listed. Everything on its ports shares one \(shortSpeed(uplink)) line back to the Mac.")
                                 .font(.caption2).foregroundStyle(.secondary)
                                 .padding(.leading, 14)
                                 .fixedSize(horizontal: false, vertical: true)
