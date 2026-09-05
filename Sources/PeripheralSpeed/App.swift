@@ -60,11 +60,13 @@ struct MenuContent: View {
         (tbDisplayName ?? "display").replacingOccurrences(of: "Apple Inc. ", with: "")
     }
 
-    /// An Apple display announces itself as generically named Apple hubs on
-    /// the Thunderbolt-tunneled controller — plumbing, not user gear.
+    /// An Apple display announces itself as generically named Apple hubs —
+    /// plumbing, not user gear. On M1 they arrive on a controller class we
+    /// recognize as Thunderbolt-tunneled; newer silicon uses other class
+    /// names, so an Apple-vendor generic hub is accepted from any non-USB-A
+    /// bus while a Thunderbolt display is attached.
     private func isDisplayInternalHub(_ d: USBDevice) -> Bool {
-        guard tbDisplayName != nil, d.isHub, d.depth == 0,
-              d.bus == .thunderbolt || d.bus == .unknown else { return false }
+        guard tbDisplayName != nil, d.isHub, d.depth == 0, d.bus != .usbA else { return false }
         return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
             && d.name.localizedCaseInsensitiveContains("hub")
     }
@@ -92,15 +94,18 @@ struct MenuContent: View {
         }
     }
 
-    /// Empty TB buses minus USB-C ports occupied by USB-mode devices the
-    /// TB report can't see (one controller == one physical port). On Macs
-    /// with no Thunderbolt at all (MacBook Neo) there is no TB report, so
-    /// count from the model's known ports instead.
+    /// Free USB-C ports. With a known model, count from the inventory:
+    /// total ports minus occupied Thunderbolt buses minus ports occupied by
+    /// USB-mode devices (one controller == one physical port) — this also
+    /// covers non-Thunderbolt USB-C ports (Mac mini front ports, MacBook
+    /// Neo) that no report shows while empty. Unknown models fall back to
+    /// counting empty Thunderbolt buses.
     private var freeUSBCCount: Int {
         let usbModePorts = Set(usbCBlocks.filter { $0.root.bus == .usbC }
             .map(\.root.controllerID)).count
-        if let inv = scanner.result.inventory, !inv.hasThunderbolt {
-            return max(0, inv.usbC - usbModePorts)
+        if let inv = scanner.result.inventory {
+            let occupiedTB = scanner.result.tbPorts.filter { !$0.deviceNames.isEmpty }.count
+            return max(0, inv.usbC - occupiedTB - usbModePorts)
         }
         let emptyTB = scanner.result.tbPorts.filter { $0.deviceNames.isEmpty }.count
         return max(0, emptyTB - usbModePorts)

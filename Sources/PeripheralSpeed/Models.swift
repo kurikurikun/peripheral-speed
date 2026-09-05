@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.11"
+    static let version = "0.12"
     static var display: String { "v\(version)" }
 }
 
@@ -116,9 +116,11 @@ extension PortInventory {
         add(["Macmini9,1"], .init(marketingName: "Mac mini (M1)", usbC: 2, usbA: 2, usbAGbps: 5))
         add(["Mac14,3"], .init(marketingName: "Mac mini (M2)", usbC: 2, usbA: 2, usbAGbps: 5))
         add(["Mac14,12"], .init(marketingName: "Mac mini (M2 Pro)", usbC: 4, usbA: 2, usbAGbps: 5))
-        add(["Mac16,10"], .init(marketingName: "Mac mini (M4)", usbC: 5, usbA: 0, usbAGbps: 0))
-        add(["Mac16,11"], .init(marketingName: "Mac mini (M4 Pro)", usbC: 5, usbA: 0, usbAGbps: 0))
-        add(["Mac17,16", "Mac18,5"], .init(marketingName: "Mac mini (2026)", usbC: 5, usbA: 0, usbAGbps: 0))
+        // 3 Thunderbolt back + 2 plain USB-C (10 Gb/s) front
+        let m4MiniLabel = "back ≈ 2–3 GB/s · front ≈ 1.0 GB/s"
+        add(["Mac16,10"], .init(marketingName: "Mac mini (M4)", usbC: 5, usbA: 0, usbAGbps: 0, usbCLabel: m4MiniLabel))
+        add(["Mac16,11"], .init(marketingName: "Mac mini (M4 Pro)", usbC: 5, usbA: 0, usbAGbps: 0, usbCLabel: m4MiniLabel))
+        add(["Mac17,16", "Mac18,5"], .init(marketingName: "Mac mini (2026)", usbC: 5, usbA: 0, usbAGbps: 0, usbCLabel: m4MiniLabel))
 
         // iMac
         add(["iMac21,1"], .init(marketingName: "iMac 24″ (M1)", usbC: 4, usbA: 0, usbAGbps: 0))
