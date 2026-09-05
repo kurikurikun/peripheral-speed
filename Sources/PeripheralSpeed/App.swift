@@ -272,8 +272,21 @@ struct MenuContent: View {
     private func usbSubtitle(_ d: USBDevice) -> String {
         guard let mbps = d.speedMbps else { return d.speedLabel }
         if d.isStorage { return "copies up to ≈ \(Int(mbps / 10)) MB/s" }
-        if d.isHub { return "its ports share \(shortSpeed(mbps))" }
+        if d.isHub {
+            // A USB 3 hub is two hubs in one shell; when something on this
+            // port runs faster than this hub node, this node is only the
+            // slow lane and its speed says nothing about the port.
+            if fasterSiblingExists(than: d) { return "hub — slow lane, fast devices bypass it" }
+            return "its ports share \(shortSpeed(mbps))"
+        }
         return d.speedLabel
+    }
+
+    private func fasterSiblingExists(than d: USBDevice) -> Bool {
+        scanner.result.usbDevices.contains {
+            $0.controllerID == d.controllerID && !$0.isHub
+                && ($0.speedMbps ?? 0) > (d.speedMbps ?? 0)
+        }
     }
 
     private func shortSpeed(_ mbps: Double) -> String {
