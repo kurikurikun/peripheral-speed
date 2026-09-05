@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.4"
+    static let version = "0.5"
     static var display: String { "v\(version)" }
 }
 
@@ -147,6 +147,9 @@ struct USBDevice: Identifiable {
     /// Silicon one USB-C controller == one physical port, so siblings
     /// sharing a controllerID share a physical port.
     var controllerID: Int = -1
+    /// whole-disk BSD name (e.g. "disk4") when this device currently has
+    /// mounted/ejectable media — what `diskutil eject` wants.
+    var bsdName: String? = nil
 
     var verdict: Verdict {
         guard let mbps = speedMbps else { return .good }

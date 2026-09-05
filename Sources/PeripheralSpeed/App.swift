@@ -138,6 +138,26 @@ struct MenuContent: View {
         }
     }
 
+    /// Every USB device renders through this: dot, subtitle, advice, and —
+    /// for a drive with mounted media — the eject button and its outcome.
+    @ViewBuilder
+    private func deviceRow(_ d: USBDevice, title: String? = nil, indent: Int = 0) -> some View {
+        let ejected = scanner.ejectedLocations.contains(d.locationID)
+        DeviceRow(dot: dot(for: d),
+                  title: title ?? d.name,
+                  subtitle: ejected ? "" : subtitle(d),
+                  advice: adviceFor(d),
+                  indent: indent,
+                  note: ejected ? ("Ejected — safe to unplug.", .green)
+                        : scanner.ejectErrors[d.locationID].map { ($0, .orange) },
+                  ejecting: scanner.ejectingLocations.contains(d.locationID),
+                  onEject: {
+                      guard d.isStorage, !ejected, let bsd = d.bsdName else { return nil }
+                      return { scanner.eject(bsd, location: d.locationID) }
+                  }())
+            .help(d.speedLabel)
+    }
+
     /// Model-aware upgrade of a drive's advice: on a Neo a USB-2-speed
     /// drive is most likely just in the wrong port.
     private func adviceFor(_ d: USBDevice) -> String? {
@@ -221,20 +241,12 @@ struct MenuContent: View {
                     }
                     ForEach(usbCRows, id: \.block.id) { row in
                         let extra = row.first ? 0 : 1
-                        DeviceRow(dot: dot(for: row.block.root),
+                        deviceRow(row.block.root,
                                   title: row.first ? "USB-C — \(row.block.root.name)"
                                                    : row.block.root.name,
-                                  subtitle: subtitle(row.block.root),
-                                  advice: adviceFor(row.block.root),
                                   indent: extra)
-                            .help(row.block.root.speedLabel)
                         ForEach(row.block.children) { d in
-                            DeviceRow(dot: dot(for: d),
-                                      title: d.name,
-                                      subtitle: subtitle(d),
-                                      advice: adviceFor(d),
-                                      indent: d.depth + extra)
-                                .help(d.speedLabel)
+                            deviceRow(d, indent: d.depth + extra)
                         }
                     }
                     if let portRows = freeUSBCPortRows {
@@ -253,18 +265,9 @@ struct MenuContent: View {
                     }
 
                     ForEach(usbABlocks) { b in
-                        DeviceRow(dot: dot(for: b.root),
-                                  title: "USB-A — \(b.root.name)",
-                                  subtitle: subtitle(b.root),
-                                  advice: b.root.advice)
-                            .help(b.root.speedLabel)
+                        deviceRow(b.root, title: "USB-A — \(b.root.name)")
                         ForEach(b.children) { d in
-                            DeviceRow(dot: dot(for: d),
-                                      title: d.name,
-                                      subtitle: subtitle(d),
-                                      advice: d.advice,
-                                      indent: d.depth)
-                                .help(d.speedLabel)
+                            deviceRow(d, indent: d.depth)
                         }
                     }
                     ForEach(0..<freeUSBACount, id: \.self) { _ in
@@ -280,12 +283,7 @@ struct MenuContent: View {
                     section("On your \(displayShortName)") {
                         let rows = displayRows
                         ForEach(rows, id: \.d.id) { row in
-                            DeviceRow(dot: dot(for: row.d),
-                                      title: row.d.name,
-                                      subtitle: subtitle(row.d),
-                                      advice: row.d.advice,
-                                      indent: row.indent)
-                                .help(row.d.speedLabel)
+                            deviceRow(row.d, indent: row.indent)
                         }
                         if rows.isEmpty {
                             Text("Nothing plugged into its ports right now")
@@ -396,6 +394,9 @@ struct DeviceRow: View {
     let subtitle: String
     let advice: String?
     var indent: Int = 0
+    var note: (text: String, color: Color)? = nil
+    var ejecting: Bool = false
+    var onEject: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -411,11 +412,26 @@ struct DeviceRow: View {
                 if !subtitle.isEmpty {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }
+                if ejecting {
+                    ProgressView().controlSize(.small)
+                } else if let onEject {
+                    Button(action: onEject) { Image(systemName: "eject.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Eject so it's safe to unplug")
+                }
             }
             if let advice {
                 Text(advice)
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .padding(.leading, CGFloat(indent + 1) * 14)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let note {
+                Text(note.text)
+                    .font(.caption)
+                    .foregroundStyle(note.color)
                     .padding(.leading, CGFloat(indent + 1) * 14)
                     .fixedSize(horizontal: false, vertical: true)
             }

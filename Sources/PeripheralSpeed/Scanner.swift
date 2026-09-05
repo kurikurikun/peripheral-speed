@@ -8,6 +8,12 @@ final class PeripheralScanner: ObservableObject {
     @Published var result = ScanResult()
     @Published var scanning = false
 
+    // Eject state, keyed by locationID (stable while the device stays
+    // plugged in, even after its media goes away post-eject).
+    @Published var ejectingLocations: Set<Int> = []
+    @Published var ejectedLocations: Set<Int> = []
+    @Published var ejectErrors: [Int: String] = [:]
+
     private var timer: Timer?
 
     // ioreg speed codes -> (Mb/s, label). Two families, two maps.
@@ -41,6 +47,10 @@ final class PeripheralScanner: ObservableObject {
             DispatchQueue.main.async {
                 self.result = r
                 self.scanning = false
+                // forget eject state for devices that were unplugged
+                let present = Set(r.usbDevices.map(\.locationID))
+                self.ejectedLocations.formIntersection(present)
+                self.ejectErrors = self.ejectErrors.filter { present.contains($0.key) }
             }
         }
     }
@@ -86,10 +96,66 @@ final class PeripheralScanner: ObservableObject {
         return locs
     }
 
+    /// locationID -> whole-disk BSD name, via each USB device's IOService
+    /// subtree (the IOMedia node lives there, not in the IOUSB plane).
+    /// The walk stops at nested USB devices so a hub never claims the
+    /// disk of a drive plugged into it.
+    private func bsdNames() -> [Int: String] {
+        var map: [Int: String] = [:]
+        guard let trees = runPlist("/usr/sbin/ioreg",
+                                   ["-c", "IOUSBHostDevice", "-a", "-r", "-l"])
+                as? [[String: Any]] else { return map }
+        for tree in trees {
+            guard let loc = tree["locationID"] as? Int else { continue }
+            func find(_ n: [String: Any], isRoot: Bool) -> String? {
+                if !isRoot, (n["IOObjectClass"] as? String) == "IOUSBHostDevice" { return nil }
+                if n["Whole"] as? Bool == true, let bsd = n["BSD Name"] as? String { return bsd }
+                for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
+                    if let found = find(c, isRoot: false) { return found }
+                }
+                return nil
+            }
+            if let bsd = find(tree, isRoot: true) { map[loc] = bsd }
+        }
+        return map
+    }
+
+    /// diskutil eject: unmounts every volume and offlines the media —
+    /// same as Finder's eject, refuses politely if files are open.
+    func eject(_ bsd: String, location: Int) {
+        ejectingLocations.insert(location)
+        ejectErrors[location] = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+            p.arguments = ["eject", bsd]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = pipe
+            var ok = false
+            do {
+                try p.run()
+                _ = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                ok = p.terminationStatus == 0
+            } catch {}
+            DispatchQueue.main.async {
+                self?.ejectingLocations.remove(location)
+                if ok {
+                    self?.ejectedLocations.insert(location)
+                } else {
+                    self?.ejectErrors[location] =
+                        "Couldn't eject — close any files open on it and try again."
+                }
+            }
+        }
+    }
+
     private func scanUSB() -> [USBDevice] {
         guard let root = runPlist("/usr/sbin/ioreg", ["-p", "IOUSB", "-a", "-l"])
                 as? [String: Any] else { return [] }
         let storageLocs = storageLocations()
+        let disks = bsdNames()
         var devices: [USBDevice] = []
 
         func isDevice(_ n: [String: Any]) -> Bool {
@@ -132,7 +198,8 @@ final class PeripheralScanner: ObservableObject {
                     depth: depth,
                     bus: bus,
                     locationID: loc ?? 0,
-                    controllerID: controller))
+                    controllerID: controller,
+                    bsdName: storage ? loc.flatMap { disks[$0] } : nil))
                 childDepth = depth + 1
             }
             for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
