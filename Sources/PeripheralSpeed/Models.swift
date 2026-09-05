@@ -1,11 +1,10 @@
 import Foundation
 
-/// Bump on every release the family might install; codename = what the
-/// release was about. Shown in the menu header and the shared zip name.
+/// Bump on every release the family might install. Shown in the menu
+/// header and the shared zip name.
 enum AppInfo {
     static let version = "0.4"
-    static let codename = "Neo"
-    static var display: String { "v\(version) · \(codename)" }
+    static var display: String { "v\(version)" }
 }
 
 enum Verdict {
