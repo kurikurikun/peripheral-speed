@@ -6,6 +6,18 @@ enum Verdict {
     case bad        // real bottleneck with a known fix
 }
 
+/// Every user-facing number is a real-world copy speed in GB/s — one unit
+/// everywhere, so values compare at a glance. Link rates come in bits/s
+/// (Mb/Gb); dividing by 10 covers the bit→byte conversion plus protocol
+/// overhead, then ÷1000 lands on GB/s.
+enum Speed {
+    static func gbCopy(linkMbps: Double) -> String {
+        let gb = linkMbps / 10 / 1_000
+        return gb >= 0.095 ? String(format: "%.1f GB/s", gb)
+                           : String(format: "%.2f GB/s", gb)
+    }
+}
+
 /// Which physical wiring a USB device entered the Mac through. On Apple
 /// Silicon each root controller class gives it away: the Fresco Logic
 /// controller drives the USB-A ports, AppleT####USBXHCI is a built-in
@@ -61,9 +73,9 @@ struct USBDevice: Identifiable {
     var advice: String? {
         switch verdict {
         case .bad:
-            return "Drive stuck at USB 2 speed — swap the cable for one marked 10Gbps/SS, or plug it straight into the Mac."
+            return "Stuck at ≈ 0.05 GB/s (old-USB speed) — swap the cable for one marked 10Gbps/SS, or plug it straight into the Mac."
         case .caution:
-            return "Linked at 5 Gb/s. Fine for 5 Gb/s drives; if this SSD is rated 10 Gb/s, the cable or hub is halving it."
+            return "Running at ≈ 0.5 GB/s. Fine for cheaper drives; if this SSD is rated ≈ 1 GB/s, the cable or hub is halving it."
         case .good:
             return nil
         }
@@ -84,7 +96,7 @@ struct TBPort: Identifiable {
 
     var advice: String? {
         verdict == .caution
-            ? "Linked at \(Int(gbps ?? 0)) Gb/s on a 40 Gb/s-capable port — usually a passive cable over 0.8 m or a plain USB-C cable. Use a Thunderbolt-certified cable (lightning-bolt logo)."
+            ? "This link moves ≈ \(Speed.gbCopy(linkMbps: (gbps ?? 0) * 1_000)) instead of ≈ 3 GB/s — usually a passive cable over 0.8 m or a plain USB-C cable. Use a Thunderbolt-certified cable (lightning-bolt logo)."
             : nil
     }
 }
