@@ -58,6 +58,9 @@ struct USBDevice: Identifiable {
     /// 1 = plugged into a hub/dock/display, 2 = hub behind a hub, …
     var depth: Int = 0
     var bus: USBBus = .unknown
+    /// IOKit locationID: top byte is the bus, then one nibble per hub port
+    /// hop — the physical path to the socket the device is in.
+    var locationID: Int = 0
     /// index of the root controller this device hangs off — on Apple
     /// Silicon one USB-C controller == one physical port, so siblings
     /// sharing a controllerID share a physical port.

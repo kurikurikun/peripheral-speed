@@ -108,6 +108,50 @@ struct MenuContent: View {
 
     private var drives: [USBDevice] { scanner.result.usbDevices.filter(\.isStorage) }
 
+    /// Port hops from a locationID (top byte = bus, then a nibble per hop).
+    private func portChain(_ loc: Int) -> [Int] {
+        var out: [Int] = []
+        var shift = 20
+        while shift >= 0 {
+            let nib = (loc >> shift) & 0xF
+            if nib == 0 { break }
+            out.append(nib)
+            shift -= 4
+        }
+        return out
+    }
+
+    /// Display rows with the dual-plane split healed: a USB 3 hub shows up
+    /// as a hub node on the slow plane while fast devices behind it attach
+    /// to the display's fast plane directly. Both planes number physical
+    /// ports the same way, so a fast device whose first port hop matches a
+    /// slow-plane hub's is physically behind that hub — nest it there.
+    private var displayRows: [(d: USBDevice, indent: Int)] {
+        func tail(_ d: USBDevice, root: USBDevice) -> [Int] {
+            let rc = portChain(root.locationID), dc = portChain(d.locationID)
+            return dc.count > rc.count ? Array(dc.dropFirst(rc.count)) : []
+        }
+        let fastRoots = displayBlocks.filter { ($0.root.speedMbps ?? 0) >= 5_000 }
+        let slowRoots = displayBlocks.filter { ($0.root.speedMbps ?? 0) < 5_000 }
+        var fastItems = fastRoots.flatMap { b in
+            b.children.filter { !isDisplayBuiltin($0) }
+                .map { (d: $0, t: tail($0, root: b.root)) }
+        }
+        var rows: [(d: USBDevice, indent: Int)] = []
+        for slow in slowRoots {
+            for d in slow.children where !isDisplayBuiltin(d) {
+                rows.append((d, max(0, d.depth - 1)))
+                if d.isHub, let port = tail(d, root: slow.root).first {
+                    let behind = fastItems.filter { $0.t.first == port }
+                    fastItems.removeAll { $0.t.first == port }
+                    for f in behind { rows.append((f.d, max(0, f.d.depth - 1) + 1)) }
+                }
+            }
+        }
+        for f in fastItems { rows.append((f.d, max(0, f.d.depth - 1))) }
+        return rows
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -181,22 +225,22 @@ struct MenuContent: View {
 
                 if !displayBlocks.isEmpty {
                     section("On your \(displayShortName)") {
-                        let plugged = displayBlocks.flatMap(\.children).filter { !isDisplayBuiltin($0) }
-                        ForEach(plugged) { d in
-                            DeviceRow(dot: dot(for: d),
-                                      title: d.name,
-                                      subtitle: subtitle(d),
-                                      advice: d.advice,
-                                      indent: max(0, d.depth - 1))
-                                .help(d.speedLabel)
+                        let rows = displayRows
+                        ForEach(rows, id: \.d.id) { row in
+                            DeviceRow(dot: dot(for: row.d),
+                                      title: row.d.name,
+                                      subtitle: subtitle(row.d),
+                                      advice: row.d.advice,
+                                      indent: row.indent)
+                                .help(row.d.speedLabel)
                         }
-                        if plugged.isEmpty {
+                        if rows.isEmpty {
                             Text("Nothing plugged into its ports right now")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .padding(.leading, 14)
                         }
                         // The shared uplink only matters when a drive rides it.
-                        if plugged.contains(where: \.isStorage),
+                        if rows.contains(where: \.d.isStorage),
                            let uplink = displayBlocks.compactMap(\.root.speedMbps).max() {
                             Text("Drives on the display share ≈ \(Speed.gbCopy(linkMbps: uplink)) back to the Mac.")
                                 .font(.caption2).foregroundStyle(.secondary)

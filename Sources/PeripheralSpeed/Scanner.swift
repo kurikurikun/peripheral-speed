@@ -131,6 +131,7 @@ final class PeripheralScanner: ObservableObject {
                     isHub: hub,
                     depth: depth,
                     bus: bus,
+                    locationID: loc ?? 0,
                     controllerID: controller))
                 childDepth = depth + 1
             }
