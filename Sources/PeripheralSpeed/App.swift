@@ -433,8 +433,12 @@ struct MenuContent: View {
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Built with Claude Code · move-ment · 2026")
-                .font(.caption2).foregroundStyle(.tertiary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Made in Japan · Built with Claude Code · 2026")
+                    .foregroundStyle(.tertiary)
+                Link("www.move-ment.co", destination: URL(string: "https://www.move-ment.co")!)
+            }
+            .font(.caption2)
         }
     }
 
