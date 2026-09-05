@@ -133,7 +133,7 @@ struct MenuContent: View {
         }
         return pool.map { p in
             p.linkMbps > 480
-                ? ("USB-C \(p.label) — free", "fits a drive at ≈ \(Speed.gbCopy(linkMbps: p.linkMbps))")
+                ? ("USB-C \(p.label) — free", "≈ \(Speed.gbCopy(linkMbps: p.linkMbps))")
                 : ("USB-C \(p.label) — free", "only ≈ \(Speed.gbCopy(linkMbps: p.linkMbps)) — not for drives")
         }
     }
@@ -278,7 +278,7 @@ struct MenuContent: View {
                         ForEach(0..<freeUSBCCount, id: \.self) { _ in
                             DeviceRow(dot: .gray, title: "USB-C — free",
                                       subtitle: scanner.result.inventory?.usbCLabel
-                                                ?? "fits a drive at ≈ 2–3 GB/s",
+                                                ?? "≈ 2–3 GB/s",
                                       advice: nil)
                                 .help("Marketed as 40 Gb/s (Thunderbolt / USB4) — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                         }
@@ -293,7 +293,7 @@ struct MenuContent: View {
                     ForEach(0..<freeUSBACount, id: \.self) { _ in
                         let gbits = scanner.result.inventory?.usbAGbps ?? 5
                         DeviceRow(dot: .gray, title: "USB-A — free",
-                                  subtitle: "fits a drive at ≈ \(Speed.gbCopy(linkMbps: Double(gbits) * 1_000))",
+                                  subtitle: "≈ \(Speed.gbCopy(linkMbps: Double(gbits) * 1_000))",
                                   advice: nil)
                             .help("Marketed as \(gbits) Gb/s — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                     }
@@ -430,26 +430,24 @@ struct DeviceRow: View {
                         .padding(.leading, CGFloat(indent) * 14)
                 }
                 Circle().fill(dot).frame(width: 8, height: 8)
+                if ejecting {
+                    ProgressView().controlSize(.small)
+                } else if let onEject {
+                    Button(action: onEject) { Image(systemName: "eject.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Eject so it's safe to unplug")
+                }
                 Text(title).font(.system(.body, design: .rounded))
                 Spacer()
                 if !subtitle.isEmpty {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }
-                if ejecting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    if let onTest {
-                        Button(action: onTest) { Image(systemName: "gauge") }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .help("Measure real copy speed (writes a temp file for a few seconds)")
-                    }
-                    if let onEject {
-                        Button(action: onEject) { Image(systemName: "eject.fill") }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .help("Eject so it's safe to unplug")
-                    }
+                if !ejecting, let onTest {
+                    Button(action: onTest) { Image(systemName: "gauge") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Measure real copy speed (writes a temp file for a few seconds)")
                 }
             }
             if let advice {
