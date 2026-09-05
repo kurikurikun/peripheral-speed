@@ -35,7 +35,7 @@ struct MenuContent: View {
     private struct USBBlock: Identifiable {
         let root: USBDevice
         var children: [USBDevice] = []
-        var id: UUID { root.id }
+        var id: String { root.id }
     }
 
     private var blocks: [USBBlock] {

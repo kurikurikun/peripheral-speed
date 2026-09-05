@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.9"
+    static let version = "0.10"
     static var display: String { "v\(version)" }
 }
 
@@ -143,7 +143,10 @@ extension PortInventory {
 }
 
 struct USBDevice: Identifiable {
-    let id = UUID()
+    // Identity from the hardware, not a fresh UUID per scan — SwiftUI then
+    // updates rows in place across rescans instead of recreating them
+    // (recreation resets hover state, which kept tooltips from ever firing).
+    var id: String { "\(locationID)-\(controllerID)-\(depth)-\(name)" }
     let name: String
     let vendor: String?
     let speedMbps: Double?
@@ -185,7 +188,7 @@ struct USBDevice: Identifiable {
 }
 
 struct TBPort: Identifiable {
-    let id = UUID()
+    var id: String { busName + (deviceNames.first ?? "") }
     let busName: String
     let speedText: String       // e.g. "Up to 40 Gb/s x1", or a status when empty
     let deviceNames: [String]
