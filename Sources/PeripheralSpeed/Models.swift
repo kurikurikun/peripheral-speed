@@ -29,21 +29,84 @@ enum USBBus {
 
 /// What ports a given Mac model physically has — macOS can't enumerate
 /// empty USB-A ports, but it does know what machine it is.
+/// Counts and speeds from Apple's tech-specs pages per model identifier.
 struct PortInventory {
     let marketingName: String
-    let usbC: Int       // USB-C / Thunderbolt ports
+    let usbC: Int       // USB-C ports of any flavor (Thunderbolt or not)
     let usbA: Int
     let usbAGbps: Int   // link speed the USB-A ports run at
+    /// Custom free-USB-C subtitle for machines whose USB-C ports differ
+    /// from the usual "Thunderbolt, ≈ 2–3 GB/s for a drive" story.
+    var usbCLabel: String? = nil
+    /// false on Macs with no Thunderbolt at all (MacBook Neo) — free-port
+    /// counting then can't lean on the Thunderbolt bus report.
+    var hasThunderbolt: Bool = true
 
-    static let known: [String: PortInventory] = [
-        "Macmini9,1": .init(marketingName: "Mac mini (M1)", usbC: 2, usbA: 2, usbAGbps: 5),
-        "Mac14,3": .init(marketingName: "Mac mini (M2)", usbC: 2, usbA: 2, usbAGbps: 5),
-        "Mac14,12": .init(marketingName: "Mac mini (M2 Pro)", usbC: 4, usbA: 2, usbAGbps: 5),
-        "Mac16,10": .init(marketingName: "Mac mini (M4)", usbC: 5, usbA: 0, usbAGbps: 0),
-        "Mac16,11": .init(marketingName: "Mac mini (M4 Pro)", usbC: 5, usbA: 0, usbAGbps: 0),
-        "Mac13,1": .init(marketingName: "Mac Studio (M1 Max)", usbC: 6, usbA: 2, usbAGbps: 10),
-        "Mac13,2": .init(marketingName: "Mac Studio (M1 Ultra)", usbC: 6, usbA: 2, usbAGbps: 10),
-    ]
+    static let known: [String: PortInventory] = {
+        var t: [String: PortInventory] = [:]
+        func add(_ ids: [String], _ inv: PortInventory) { for id in ids { t[id] = inv } }
+
+        // MacBook Air
+        add(["MacBookAir10,1"], .init(marketingName: "MacBook Air (M1)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac14,2"], .init(marketingName: "MacBook Air 13″ (M2)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac14,15"], .init(marketingName: "MacBook Air 15″ (M2)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac15,12"], .init(marketingName: "MacBook Air 13″ (M3)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac15,13"], .init(marketingName: "MacBook Air 15″ (M3)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac16,12"], .init(marketingName: "MacBook Air 13″ (M4)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac16,13"], .init(marketingName: "MacBook Air 15″ (M4)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac17,3"], .init(marketingName: "MacBook Air 13″ (M5)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac17,4"], .init(marketingName: "MacBook Air 15″ (M5)", usbC: 2, usbA: 0, usbAGbps: 0))
+
+        // MacBook Neo — no Thunderbolt; the two ports are NOT equal
+        add(["Mac17,5"], .init(marketingName: "MacBook Neo", usbC: 2, usbA: 0, usbAGbps: 0,
+            usbCLabel: "left port fits a drive at ≈ 1.0 GB/s · right only ≈ 0.05 GB/s",
+            hasThunderbolt: false))
+
+        // MacBook Pro
+        add(["MacBookPro17,1"], .init(marketingName: "MacBook Pro 13″ (M1)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["MacBookPro18,3", "MacBookPro18,4"], .init(marketingName: "MacBook Pro 14″ (M1 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["MacBookPro18,1", "MacBookPro18,2"], .init(marketingName: "MacBook Pro 16″ (M1 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac14,7"], .init(marketingName: "MacBook Pro 13″ (M2)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac14,5", "Mac14,6"], .init(marketingName: "MacBook Pro 14″ (M2 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac14,9", "Mac14,10"], .init(marketingName: "MacBook Pro 16″ (M2 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac15,3"], .init(marketingName: "MacBook Pro 14″ (M3)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac15,6", "Mac15,8", "Mac15,10"], .init(marketingName: "MacBook Pro 14″ (M3 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac15,7", "Mac15,9", "Mac15,11"], .init(marketingName: "MacBook Pro 16″ (M3 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac16,1"], .init(marketingName: "MacBook Pro 14″ (M4)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac16,6", "Mac16,8"], .init(marketingName: "MacBook Pro 14″ (M4 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac16,5", "Mac16,7"], .init(marketingName: "MacBook Pro 16″ (M4 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac17,2"], .init(marketingName: "MacBook Pro 14″ (M5)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac17,7", "Mac17,9"], .init(marketingName: "MacBook Pro 14″ (M5 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+        add(["Mac17,6", "Mac17,8"], .init(marketingName: "MacBook Pro 16″ (M5 Pro/Max)", usbC: 3, usbA: 0, usbAGbps: 0))
+
+        // Mac mini
+        add(["Macmini9,1"], .init(marketingName: "Mac mini (M1)", usbC: 2, usbA: 2, usbAGbps: 5))
+        add(["Mac14,3"], .init(marketingName: "Mac mini (M2)", usbC: 2, usbA: 2, usbAGbps: 5))
+        add(["Mac14,12"], .init(marketingName: "Mac mini (M2 Pro)", usbC: 4, usbA: 2, usbAGbps: 5))
+        add(["Mac16,10"], .init(marketingName: "Mac mini (M4)", usbC: 5, usbA: 0, usbAGbps: 0))
+        add(["Mac16,11"], .init(marketingName: "Mac mini (M4 Pro)", usbC: 5, usbA: 0, usbAGbps: 0))
+        add(["Mac17,16", "Mac18,5"], .init(marketingName: "Mac mini (2026)", usbC: 5, usbA: 0, usbAGbps: 0))
+
+        // iMac
+        add(["iMac21,1"], .init(marketingName: "iMac 24″ (M1)", usbC: 4, usbA: 0, usbAGbps: 0))
+        add(["iMac21,2"], .init(marketingName: "iMac 24″ (M1)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac15,4"], .init(marketingName: "iMac 24″ (M3)", usbC: 2, usbA: 0, usbAGbps: 0))
+        add(["Mac15,5"], .init(marketingName: "iMac 24″ (M3)", usbC: 4, usbA: 0, usbAGbps: 0))
+        add(["Mac16,2"], .init(marketingName: "iMac 24″ (M4)", usbC: 4, usbA: 0, usbAGbps: 0))
+        add(["Mac16,3"], .init(marketingName: "iMac 24″ (M4)", usbC: 2, usbA: 0, usbAGbps: 0))
+
+        // Mac Studio / Mac Pro
+        add(["Mac13,1"], .init(marketingName: "Mac Studio (M1 Max)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac13,2"], .init(marketingName: "Mac Studio (M1 Ultra)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac14,13"], .init(marketingName: "Mac Studio (M2 Max)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac14,14"], .init(marketingName: "Mac Studio (M2 Ultra)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac16,9"], .init(marketingName: "Mac Studio (M4 Max)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac15,14"], .init(marketingName: "Mac Studio (M3 Ultra)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac17,14", "Mac17,15"], .init(marketingName: "Mac Studio (M5)", usbC: 6, usbA: 2, usbAGbps: 10))
+        add(["Mac14,8"], .init(marketingName: "Mac Pro (M2 Ultra)", usbC: 8, usbA: 2, usbAGbps: 10))
+
+        return t
+    }()
 }
 
 struct USBDevice: Identifiable {

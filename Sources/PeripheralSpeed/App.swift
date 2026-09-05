@@ -93,11 +93,16 @@ struct MenuContent: View {
     }
 
     /// Empty TB buses minus USB-C ports occupied by USB-mode devices the
-    /// TB report can't see (one controller == one physical port).
+    /// TB report can't see (one controller == one physical port). On Macs
+    /// with no Thunderbolt at all (MacBook Neo) there is no TB report, so
+    /// count from the model's known ports instead.
     private var freeUSBCCount: Int {
-        let emptyTB = scanner.result.tbPorts.filter { $0.deviceNames.isEmpty }.count
         let usbModePorts = Set(usbCBlocks.filter { $0.root.bus == .usbC }
             .map(\.root.controllerID)).count
+        if let inv = scanner.result.inventory, !inv.hasThunderbolt {
+            return max(0, inv.usbC - usbModePorts)
+        }
+        let emptyTB = scanner.result.tbPorts.filter { $0.deviceNames.isEmpty }.count
         return max(0, emptyTB - usbModePorts)
     }
 
@@ -195,7 +200,9 @@ struct MenuContent: View {
                     }
                     ForEach(0..<freeUSBCCount, id: \.self) { _ in
                         DeviceRow(dot: .gray, title: "USB-C — free",
-                                  subtitle: "fits a drive at ≈ 2–3 GB/s", advice: nil)
+                                  subtitle: scanner.result.inventory?.usbCLabel
+                                            ?? "fits a drive at ≈ 2–3 GB/s",
+                                  advice: nil)
                             .help("Marketed as 40 Gb/s (Thunderbolt / USB4) — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
                     }
 
