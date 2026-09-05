@@ -139,23 +139,43 @@ struct MenuContent: View {
     }
 
     /// Every USB device renders through this: dot, subtitle, advice, and —
-    /// for a drive with mounted media — the eject button and its outcome.
+    /// for a drive with mounted media — the test/eject buttons and outcomes.
     @ViewBuilder
     private func deviceRow(_ d: USBDevice, title: String? = nil, indent: Int = 0) -> some View {
-        let ejected = scanner.ejectedLocations.contains(d.locationID)
+        let loc = d.locationID
+        let ejected = scanner.ejectedLocations.contains(loc)
+        let busy = scanner.ejectingLocations.contains(loc) || scanner.testingLocations.contains(loc)
         DeviceRow(dot: dot(for: d),
                   title: title ?? d.name,
                   subtitle: ejected ? "" : subtitle(d),
                   advice: adviceFor(d),
                   indent: indent,
-                  note: ejected ? ("Ejected — safe to unplug.", .green)
-                        : scanner.ejectErrors[d.locationID].map { ($0, .orange) },
-                  ejecting: scanner.ejectingLocations.contains(d.locationID),
+                  note: rowNote(d, ejected: ejected),
+                  ejecting: busy,
                   onEject: {
-                      guard d.isStorage, !ejected, let bsd = d.bsdName else { return nil }
-                      return { scanner.eject(bsd, location: d.locationID) }
+                      guard d.isStorage, !ejected, !busy, let bsd = d.bsdName else { return nil }
+                      return { scanner.eject(bsd, location: loc) }
+                  }(),
+                  onTest: {
+                      guard d.isStorage, !ejected, !busy, let bsd = d.bsdName else { return nil }
+                      return { scanner.speedTest(bsd, location: loc) }
                   }())
             .help(d.speedLabel)
+    }
+
+    private func rowNote(_ d: USBDevice, ejected: Bool) -> (text: String, color: Color)? {
+        let loc = d.locationID
+        if ejected { return ("Ejected — safe to unplug.", .green) }
+        if let e = scanner.ejectErrors[loc] { return (e, .orange) }
+        if let e = scanner.testErrors[loc] { return (e, .orange) }
+        if let r = scanner.testResults[loc] {
+            // orange when the drive delivers well under what its link allows
+            let expected = Speed.gbps(linkMbps: d.speedMbps ?? 0)
+            let healthy = expected == 0 || min(r.write, r.read) > expected * 0.5
+            return ("Measured: writes \(Speed.format(r.write)) · reads \(Speed.format(r.read))",
+                    healthy ? .green : .orange)
+        }
+        return nil
     }
 
     /// Model-aware upgrade of a drive's advice: on a Neo a USB-2-speed
@@ -361,10 +381,12 @@ struct MenuContent: View {
     }
 
     /// Speed only where data can flow: drives get their real-world copy
-    /// speed; everything else is just a name in the tree.
+    /// speed plus what that means for a big offload — measured write
+    /// speed once a test has run, the link estimate before that.
     private func subtitle(_ d: USBDevice) -> String {
         guard d.isStorage, let mbps = d.speedMbps else { return "" }
-        return "≈ \(Speed.gbCopy(linkMbps: mbps))"
+        let g = scanner.testResults[d.locationID]?.write ?? Speed.gbps(linkMbps: mbps)
+        return "≈ \(Speed.format(g)) · 500 GB \(Speed.eta(gb: 500, gbPerSec: g))"
     }
 
     private func tbSubtitle(_ p: TBPort) -> String {
@@ -397,6 +419,7 @@ struct DeviceRow: View {
     var note: (text: String, color: Color)? = nil
     var ejecting: Bool = false
     var onEject: (() -> Void)? = nil
+    var onTest: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -414,11 +437,19 @@ struct DeviceRow: View {
                 }
                 if ejecting {
                     ProgressView().controlSize(.small)
-                } else if let onEject {
-                    Button(action: onEject) { Image(systemName: "eject.fill") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Eject so it's safe to unplug")
+                } else {
+                    if let onTest {
+                        Button(action: onTest) { Image(systemName: "gauge") }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Measure real copy speed (writes a temp file for a few seconds)")
+                    }
+                    if let onEject {
+                        Button(action: onEject) { Image(systemName: "eject.fill") }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Eject so it's safe to unplug")
+                    }
                 }
             }
             if let advice {

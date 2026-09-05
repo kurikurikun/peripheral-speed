@@ -14,6 +14,11 @@ final class PeripheralScanner: ObservableObject {
     @Published var ejectedLocations: Set<Int> = []
     @Published var ejectErrors: [Int: String] = [:]
 
+    // Measured speed-test state, also keyed by locationID.
+    @Published var testingLocations: Set<Int> = []
+    @Published var testResults: [Int: (write: Double, read: Double)] = [:]  // GB/s
+    @Published var testErrors: [Int: String] = [:]
+
     private var timer: Timer?
 
     // ioreg speed codes -> (Mb/s, label). Two families, two maps.
@@ -47,10 +52,12 @@ final class PeripheralScanner: ObservableObject {
             DispatchQueue.main.async {
                 self.result = r
                 self.scanning = false
-                // forget eject state for devices that were unplugged
+                // forget eject/test state for devices that were unplugged
                 let present = Set(r.usbDevices.map(\.locationID))
                 self.ejectedLocations.formIntersection(present)
                 self.ejectErrors = self.ejectErrors.filter { present.contains($0.key) }
+                self.testResults = self.testResults.filter { present.contains($0.key) }
+                self.testErrors = self.testErrors.filter { present.contains($0.key) }
             }
         }
     }
@@ -149,6 +156,95 @@ final class PeripheralScanner: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - measured speed test
+
+    /// First mounted volume living on the given whole disk — direct
+    /// partitions or APFS volumes whose container's physical store is on it.
+    private func mountPoint(forWholeDisk whole: String) -> String? {
+        guard let dict = runPlist("/usr/sbin/diskutil", ["list", "-plist"]) as? [String: Any],
+              let all = dict["AllDisksAndPartitions"] as? [[String: Any]] else { return nil }
+        func mounts(_ vols: [[String: Any]]?) -> [String] {
+            (vols ?? []).compactMap { $0["MountPoint"] as? String }
+                .filter { $0.hasPrefix("/Volumes/") }
+        }
+        var points: [String] = []
+        for d in all {
+            let id = d["DeviceIdentifier"] as? String ?? ""
+            let stores = (d["APFSPhysicalStores"] as? [[String: Any]])?
+                .compactMap { $0["DeviceIdentifier"] as? String } ?? []
+            let onThisDisk = id == whole || id.hasPrefix(whole + "s")
+                || stores.contains { $0 == whole || $0.hasPrefix(whole + "s") }
+            guard onThisDisk else { continue }
+            points += mounts(d["Partitions"] as? [[String: Any]])
+            points += mounts(d["APFSVolumes"] as? [[String: Any]])
+        }
+        return points.first
+    }
+
+    func speedTest(_ bsd: String, location: Int) {
+        testingLocations.insert(location)
+        testErrors[location] = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            var result: (write: Double, read: Double)?
+            var error: String?
+            if let volume = self.mountPoint(forWholeDisk: bsd) {
+                (result, error) = Self.measure(volume: volume)
+            } else {
+                error = "No mounted volume to test — is the drive ejected?"
+            }
+            DispatchQueue.main.async {
+                self.testingLocations.remove(location)
+                if let result { self.testResults[location] = result }
+                if let error { self.testErrors[location] = error }
+            }
+        }
+    }
+
+    /// Write then re-read a temp file with the OS cache bypassed
+    /// (F_NOCACHE), a few seconds each way. Returns GB/s.
+    private static func measure(volume: String) -> ((write: Double, read: Double)?, String?) {
+        var fs = statfs()
+        guard statfs(volume, &fs) == 0 else { return (nil, "Couldn't inspect the drive.") }
+        let avail = UInt64(fs.f_bavail) * UInt64(fs.f_bsize)
+        let maxBytes = min(2 << 30, Int(avail / 2))
+        guard maxBytes >= 64 << 20 else { return (nil, "Not enough free space to run a test.") }
+
+        let path = volume + "/.peripheralspeed-test-\(UUID().uuidString)"
+        let fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0o600)
+        guard fd >= 0 else { return (nil, "This volume doesn't allow writing.") }
+        defer { close(fd); unlink(path) }
+        _ = fcntl(fd, F_NOCACHE, 1)
+
+        let chunk = 8 << 20
+        var buf = [UInt8](repeating: 0, count: chunk)
+        arc4random_buf(&buf, chunk)
+
+        let deadline: TimeInterval = 3
+        var written = 0
+        let wStart = Date()
+        while Date().timeIntervalSince(wStart) < deadline && written < maxBytes {
+            let n = write(fd, buf, chunk)
+            if n <= 0 { return (nil, "Writing failed mid-test.") }
+            written += n
+        }
+        fsync(fd)
+        let wSecs = Date().timeIntervalSince(wStart)
+        let writeGBps = Double(written) / wSecs / 1e9
+
+        lseek(fd, 0, SEEK_SET)
+        var readBytes = 0
+        let rStart = Date()
+        while readBytes < written {
+            let n = read(fd, &buf, chunk)
+            if n <= 0 { break }
+            readBytes += n
+        }
+        let rSecs = max(Date().timeIntervalSince(rStart), 0.001)
+        let readGBps = Double(readBytes) / rSecs / 1e9
+        return ((write: writeGBps, read: readGBps), nil)
     }
 
     private func scanUSB() -> [USBDevice] {

@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.5"
+    static let version = "0.6"
     static var display: String { "v\(version)" }
 }
 
@@ -18,10 +18,24 @@ enum Verdict {
 /// (Mb/Gb); dividing by 10 covers the bit→byte conversion plus protocol
 /// overhead, then ÷1000 lands on GB/s.
 enum Speed {
-    static func gbCopy(linkMbps: Double) -> String {
-        let gb = linkMbps / 10 / 1_000
-        return gb >= 0.095 ? String(format: "%.1f GB/s", gb)
-                           : String(format: "%.2f GB/s", gb)
+    /// Real-world copy rate in GB/s from a link rate in Mb/s.
+    static func gbps(linkMbps: Double) -> Double { linkMbps / 10 / 1_000 }
+
+    static func format(_ gb: Double) -> String {
+        gb >= 0.095 ? String(format: "%.1f GB/s", gb)
+                    : String(format: "%.2f GB/s", gb)
+    }
+
+    static func gbCopy(linkMbps: Double) -> String { format(gbps(linkMbps: linkMbps)) }
+
+    /// "≈ 8 min" for copying `gb` gigabytes at `gbPerSec`.
+    static func eta(gb: Double, gbPerSec: Double) -> String {
+        guard gbPerSec > 0 else { return "—" }
+        let secs = gb / gbPerSec
+        if secs < 55 { return "under 1 min" }
+        let mins = Int((secs / 60).rounded())
+        if mins < 60 { return "≈ \(mins) min" }
+        return "≈ \(mins / 60) h \(mins % 60) min"
     }
 }
 
