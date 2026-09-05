@@ -41,7 +41,7 @@ PLIST
 # Notarize when a Developer ID certificate and a notarytool keychain
 # profile ("peripheralspeed-notary") are present; ad-hoc sign otherwise.
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
-    | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+    | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
 PROFILE="peripheralspeed-notary"
 if [ -n "$IDENTITY" ] && xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
     echo "signing with: $IDENTITY"
