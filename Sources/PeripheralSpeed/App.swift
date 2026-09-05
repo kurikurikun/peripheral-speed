@@ -6,8 +6,36 @@ struct PeripheralSpeedApp: App {
     @StateObject private var scanner = PeripheralScanner()
 
     init() {
+        // dev tool: render the About view to a PNG and exit
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--snapshot-about"), i + 1 < args.count {
+            Self.snapshotAbout(to: args[i + 1])
+            exit(0)
+        }
         // menu-bar only: no Dock icon, no app switcher entry
         NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
+    private static func snapshotAbout(to path: String) {
+        let content = VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Peripheral Speed").font(.headline)
+                Text(AppInfo.display).font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            AboutView(scanner: PeripheralScanner(), linkAsText: true)
+        }
+        .padding(12)
+        .frame(width: 340)
+        .background(Color(nsColor: .windowBackgroundColor))
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        if let img = renderer.nsImage, let tiff = img.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
     }
 
     var body: some Scene {
@@ -408,50 +436,7 @@ struct MenuContent: View {
 
     // MARK: - pieces
 
-    private var aboutView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Shows how fast data can move through this Mac's ports — and what's slowing it down.")
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Green dot: a drive at full speed. Gray: speed doesn't matter for that device.", systemImage: "circle.fill")
-                Label("Ejects a drive so it's safe to unplug.", systemImage: "eject.fill")
-                Label("Measures a drive's real speed with a short test file.", systemImage: "gauge")
-                Label("All numbers are real-world copy speeds in GB/s.", systemImage: "speedometer")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            Divider()
-
-            Button {
-                copyDiagnostics()
-            } label: {
-                Label(diagCopied ? "Copied — ready to paste" : "Copy diagnostic info",
-                      systemImage: diagCopied ? "checkmark.circle.fill" : "doc.on.doc")
-            }
-            Text("Copies this Mac's port wiring details (device names only — nothing personal). If the port list ever looks wrong, copy this and send it to Chris.")
-                .font(.caption2).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Made in Japan · Built with Claude Code · 2026")
-                    .foregroundStyle(.tertiary)
-                Link("www.move-ment.co", destination: URL(string: "https://www.move-ment.co")!)
-            }
-            .font(.caption2)
-        }
-    }
-
-    private func copyDiagnostics() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let report = scanner.diagnosticReport()
-            DispatchQueue.main.async {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(report, forType: .string)
-                diagCopied = true
-            }
-        }
-    }
+    private var aboutView: some View { AboutView(scanner: scanner) }
 
     private var macSectionTitle: String {
         guard let inv = scanner.result.inventory else { return "On your Mac" }
@@ -519,6 +504,63 @@ struct MenuContent: View {
         case .good: return .green
         case .caution: return .yellow
         case .bad: return .red
+        }
+    }
+}
+
+struct AboutView: View {
+    let scanner: PeripheralScanner
+    /// ImageRenderer can't draw a live Link; the snapshot draws the same
+    /// text in link styling instead.
+    var linkAsText = false
+    @State private var diagCopied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Shows how fast data can move through this Mac's ports — and what's slowing it down.")
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Green dot: a drive at full speed. Gray: speed doesn't matter for that device.", systemImage: "circle.fill")
+                Label("Ejects a drive so it's safe to unplug.", systemImage: "eject.fill")
+                Label("Measures a drive's real speed with a short test file.", systemImage: "gauge")
+                Label("All numbers are real-world copy speeds in GB/s.", systemImage: "speedometer")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Divider()
+
+            Button {
+                copyDiagnostics()
+            } label: {
+                Label(diagCopied ? "Copied — ready to paste" : "Copy diagnostic info",
+                      systemImage: diagCopied ? "checkmark.circle.fill" : "doc.on.doc")
+            }
+            Text("Copies this Mac's port wiring details (device names only — nothing personal). If the port list ever looks wrong, copy this and send it to Chris.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Made in Japan · Built with Claude Code · 2026")
+                    .foregroundStyle(.tertiary)
+                if linkAsText {
+                    Text("www.move-ment.co").foregroundStyle(.blue)
+                } else {
+                    Link("www.move-ment.co", destination: URL(string: "https://www.move-ment.co")!)
+                }
+            }
+            .font(.caption2)
+        }
+    }
+
+    private func copyDiagnostics() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let report = scanner.diagnosticReport()
+            DispatchQueue.main.async {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(report, forType: .string)
+                diagCopied = true
+            }
         }
     }
 }
