@@ -4,6 +4,7 @@ import AppKit
 @main
 struct PeripheralSpeedApp: App {
     @StateObject private var scanner = PeripheralScanner()
+    @StateObject private var updates = UpdateChecker()
 
     init() {
         // dev tool: render the About view to a PNG and exit
@@ -40,8 +41,11 @@ struct PeripheralSpeedApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(scanner: scanner)
-                .onAppear { scanner.start() }
+            MenuContent(scanner: scanner, updates: updates)
+                .onAppear {
+                    scanner.start()
+                    updates.start()
+                }
         } label: {
             Image(systemName: scanner.result.worstVerdict == .bad
                   ? "exclamationmark.triangle.fill"
@@ -58,6 +62,7 @@ struct PeripheralSpeedApp: App {
 /// displays, hub plumbing) keeps its place in the tree with no speed.
 struct MenuContent: View {
     @ObservedObject var scanner: PeripheralScanner
+    @ObservedObject var updates: UpdateChecker
     @State private var showAbout = false
     @State private var diagCopied = false
 
@@ -416,6 +421,14 @@ struct MenuContent: View {
                         }
                     }
                 }
+            }
+
+            if let latest = updates.latest, let url = URL(string: latest.url) {
+                Link(destination: url) {
+                    Label("v\(latest.version) is out — click to get it",
+                          systemImage: "arrow.down.circle.fill")
+                }
+                .font(.caption)
             }
 
             Divider()

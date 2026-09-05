@@ -1,49 +1,47 @@
-# PeripheralSpeed — menu-bar app MVP
+# Peripheral Speed ⚡
 
-The app version of `peripheral-speed/speedcheck.py`: a menu-bar item that
-watches every USB / Thunderbolt link and turns red the moment a drive is
-stuck on a slow cable. Same detection logic the script field-validated
-(2026-09-05, see `../peripheral-speed/APP_ROADMAP.md`).
+A Mac menu-bar app that answers one question: **how fast can data actually copy through this Mac's ports — and what's slowing it down?**
 
-## Run it (no Xcode project needed — just Command Line Tools)
+Marketing says "10Gbps". Reality is a drive silently stuck at USB-2 behind the wrong cable, the wrong hub, or the wrong hole. Peripheral Speed reads what every device *actually negotiated*, translates everything into one honest unit (real-world **GB/s**), and tells you what to fix.
+
+![About panel](docs/about.png)
+
+## What it shows
+
+- **Your ports, laid out the way you see them on your desk** — the Mac's ports (front/back on M4 minis, left/right on the MacBook Neo, USB-A where present), then your display's ports. Free ports show what a drive plugged there would get.
+- **Drives with real numbers** — negotiated copy speed plus an offload estimate ("≈ 1.0 GB/s · 500 GB ≈ 8 min"). A ⏏ button ejects safely; a gauge button **measures true write/read speed** with a short uncached test file.
+- **Bottlenecks, with the fix** — a drive on a bad link goes red with specific advice ("move it to the left port — the right one is USB-2 only", "swap the cable for one marked 10Gbps/SS").
+- **A port database of every Apple Silicon Mac** — including ports macOS can't see while empty (USB-A, the M4 mini's front pair) and asymmetric ones (the MacBook Neo's fast-left / slow-right).
+
+Everything updates the instant you plug or unplug something (IOKit notifications — idle CPU ≈ 0%).
+
+## Install
+
+1. Download the latest `PeripheralSpeed-x.y.zip` from [Releases](https://github.com/kurikurikun/peripheral-speed/releases), unzip, and drag **PeripheralSpeed.app** into Applications (choose *Replace* if updating).
+2. The app isn't notarized yet, so clear the download flag once in Terminal:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/PeripheralSpeed.app
+   ```
+3. Open it — the ⚡ appears in the menu bar. Add it to **System Settings → General → Login Items** to start at login.
+
+Apple Silicon only (M1 and later).
+
+## Build from source
+
+No Xcode project needed — just Command Line Tools:
 
 ```bash
-cd PeripheralSpeedApp
+git clone https://github.com/kurikurikun/peripheral-speed.git
+cd peripheral-speed
 swift run
 ```
 
-A ⚡ appears in the menu bar. Click it:
+## Helping with unknown Macs
 
-- Every USB device with its negotiated speed — green / yellow / red dot.
-- Drives are labeled `· drive`, hubs `· hub`.
-- A drive on a USB-2 link goes red with the fix spelled out under it.
-- Thunderbolt/USB4 ports with link speed; 20 Gb/s links flagged yellow.
-- Re-scans every 5 seconds, so plugging/unplugging updates by itself.
-- The menu-bar icon switches to ⚠️ whenever a bottleneck exists.
+If the port list looks wrong on your Mac, click **? → Copy diagnostic info** in the app and open an issue with the result pasted in. That fingerprint (controller classes and device tree — no personal data) is exactly what's needed to add your model to the port database.
 
-To install it semi-permanently:
+## License
 
-```bash
-swift build -c release
-cp .build/release/PeripheralSpeed /Applications/PeripheralSpeed
-open /Applications/PeripheralSpeed
-```
+MIT — see [LICENSE](LICENSE).
 
-(Real .app bundle + login item + notarization come later.)
-
-## Architecture notes
-
-- `Scanner.swift` shells out to `ioreg` (IOKit registry) for USB and
-  `system_profiler -xml` for Thunderbolt — the exact plumbing the Python
-  prototype proved reliable when `system_profiler`'s USB reporting wedged.
-- v1 should replace the `ioreg` subprocess with the IOKit C API +
-  `IOServiceAddMatchingNotification`, giving instant plug/unplug events
-  instead of 5-second polling. The parsing/verdict logic stays identical.
-
-## Backlog (from APP_ROADMAP.md)
-
-1. IOKit notifications (instant updates, no polling)
-2. One-click drive benchmark + cable A/B compare
-3. Offload ETA in footage terms ("128 GB card: 54 min → 4 min")
-4. Recommended-cable link on every red flag (affiliate)
-5. .app bundle, icon, notarized direct download
+Made in Japan · Built with [Claude Code](https://claude.com/claude-code) · [www.move-ment.co](https://www.move-ment.co)
