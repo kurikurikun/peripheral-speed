@@ -62,6 +62,18 @@ else
     codesign --force --deep -s - "$APP"
 fi
 
+# RELEASE GATE: never let an unassessable app become a release zip
+# silently — this once shipped an ad-hoc build to real users when the
+# notary keychain profile vanished. Dev builds: ALLOW_ADHOC=1 ./make-app.sh
+if ! spctl -a -t exec "$APP" >/dev/null 2>&1; then
+    if [ "${ALLOW_ADHOC:-0}" != "1" ]; then
+        echo "ERROR: staged app is NOT Gatekeeper-acceptable (ad-hoc or unnotarized)."
+        echo "Fix signing/notary credentials, or set ALLOW_ADHOC=1 for a dev build."
+        exit 1
+    fi
+    echo "WARNING: shipping Gatekeeper-rejected build because ALLOW_ADHOC=1"
+fi
+
 ditto -c -k --keepParent "$APP" "build/PeripheralSpeed-$VERSION.zip"
 echo "built: build/PeripheralSpeed-$VERSION.zip"
 echo "signed app staged at: $APP"
