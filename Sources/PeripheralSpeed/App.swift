@@ -251,6 +251,11 @@ struct MenuContent: View {
                   indent: indent,
                   note: rowNote(d, ejected: ejected),
                   detail: capacityDetail(d),
+                  fillFraction: {
+                      guard d.isStorage, let c = scanner.capacities[d.locationID],
+                            c.total > 0 else { return nil }
+                      return Double(c.total - c.free) / Double(c.total)
+                  }(),
                   ejecting: busy,
                   onEject: {
                       guard d.isStorage, !ejected, !busy, let bsd = d.bsdName else { return nil }
@@ -654,6 +659,7 @@ struct DeviceRow: View {
     var indent: Int = 0
     var note: (text: String, color: Color)? = nil
     var detail: (text: String, color: Color)? = nil
+    var fillFraction: Double? = nil
     var ejecting: Bool = false
     var onEject: (() -> Void)? = nil
     var onTest: (() -> Void)? = nil
@@ -706,6 +712,20 @@ struct DeviceRow: View {
                     .font(.caption2)
                     .foregroundStyle(detail.color)
                     .padding(.leading, CGFloat(indent + 1) * 14)
+            }
+            if let fillFraction {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.secondary.opacity(0.2))
+                        Capsule()
+                            .fill(fillFraction > 0.9 ? Color.orange : Color.accentColor)
+                            .frame(width: max(3, geo.size.width * fillFraction))
+                    }
+                }
+                .frame(height: 4)
+                .padding(.leading, CGFloat(indent + 1) * 14)
+                .padding(.trailing, 2)
+                .animation(.easeOut(duration: 0.6), value: fillFraction)
             }
         }
     }

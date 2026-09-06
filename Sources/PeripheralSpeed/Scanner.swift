@@ -20,6 +20,7 @@ final class PeripheralScanner: ObservableObject {
     // while the menu is open — the idle-cost promise stands.
     @Published var capacities: [Int: (free: Int64, total: Int64)] = [:]
     @Published var activityBps: [Int: Double] = [:]
+    private var mountPoints: [Int: String] = [:]
     private var activityTimer: Timer?
     private var lastBlockSample: (bytes: [String: Int64], at: Date)?
 
@@ -113,8 +114,10 @@ final class PeripheralScanner: ObservableObject {
             r.tbPorts = self.scanThunderbolt()
             r.modelId = Self.modelIdentifier()
             var caps: [Int: (free: Int64, total: Int64)] = [:]
+            var mps: [Int: String] = [:]
             for d in r.usbDevices where d.isStorage {
                 if let bsd = d.bsdName, let mp = self.mountPoint(forWholeDisk: bsd) {
+                    mps[d.locationID] = mp
                     var fs = statfs()
                     if statfs(mp, &fs) == 0 {
                         caps[d.locationID] = (Int64(fs.f_bavail) * Int64(fs.f_bsize),
@@ -132,6 +135,7 @@ final class PeripheralScanner: ObservableObject {
                 self.testResults = self.testResults.filter { present.contains($0.key) }
                 self.testErrors = self.testErrors.filter { present.contains($0.key) }
                 self.capacities = caps
+                self.mountPoints = mps
             }
         }
     }
@@ -304,6 +308,14 @@ final class PeripheralScanner: ObservableObject {
                     }
                 }
                 self.activityBps = act
+                // live-refresh capacity so the bar moves while a copy runs
+                for (loc, mp) in self.mountPoints {
+                    var fs = statfs()
+                    if statfs(mp, &fs) == 0 {
+                        self.capacities[loc] = (Int64(fs.f_bavail) * Int64(fs.f_bsize),
+                                                Int64(fs.f_blocks) * Int64(fs.f_bsize))
+                    }
+                }
             }
         }
     }
