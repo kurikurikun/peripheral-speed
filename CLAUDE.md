@@ -12,7 +12,7 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 
 1. Bump `AppInfo.version` in `Sources/PeripheralSpeed/Models.swift` (single source of truth; shown in the panel header).
 2. Commit, push, `./make-app.sh`, `git tag vX.Y && git push origin vX.Y`.
-3. Create a GitHub Release for the tag and attach the zip. The app checks `releases/latest` daily and shows a download row to older versions — so a GitHub Release IS the update announcement.
+3. Create a GitHub Release for the tag and attach the zip TWICE: the versioned name AND a copy named exactly `PeripheralSpeed.zip` — the move-ment.co/peripheral-speed download button uses `releases/latest/download/PeripheralSpeed.zip`, which needs that stable asset name on every release. The app checks `releases/latest` daily and shows a download row to older versions — so a GitHub Release IS the update announcement.
 4. Notarized releases currently only from Chris's M1 Mac mini (cert + notary profile in its keychain, Team ID PNDN4CQY5T).
 
 ## Architecture (Sources/PeripheralSpeed/)

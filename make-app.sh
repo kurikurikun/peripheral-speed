@@ -7,9 +7,12 @@ cd "$(dirname "$0")"
 VERSION=$(grep 'static let version' Sources/PeripheralSpeed/Models.swift | sed 's/.*"\(.*\)".*/\1/')
 swift build -c release
 
-APP=build/PeripheralSpeed.app
+# assemble OUTSIDE any iCloud-synced folder: sync daemons re-stamp
+# Finder/FileProvider metadata that strict codesigning rejects
+STAGE=$(mktemp -d /tmp/peripheralspeed-build.XXXXXX)
+APP="$STAGE/PeripheralSpeed.app"
 rm -rf build
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/PeripheralSpeed "$APP/Contents/MacOS/"
 cp Icon/AppIcon.icns "$APP/Contents/Resources/"
 
@@ -43,6 +46,7 @@ PLIST
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
     | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
 PROFILE="peripheralspeed-notary"
+xattr -cr "$APP"   # strict signing rejects Finder metadata in the bundle
 if [ -n "$IDENTITY" ] && xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
     echo "signing with: $IDENTITY"
     codesign --force --options runtime --timestamp -s "$IDENTITY" "$APP"
@@ -60,3 +64,4 @@ fi
 
 ditto -c -k --keepParent "$APP" "build/PeripheralSpeed-$VERSION.zip"
 echo "built: build/PeripheralSpeed-$VERSION.zip"
+echo "signed app staged at: $APP"
