@@ -9,11 +9,12 @@ Marketing says "10Gbps". Reality is a drive silently stuck at USB-2 behind the w
 ## What it shows
 
 - **Your ports, laid out the way you see them on your desk** — the Mac's ports (front/back on M4 minis, left/right on the MacBook Neo, USB-A where present), then your display's ports. Free ports show what a drive plugged there would get.
-- **Drives with real numbers** — negotiated copy speed plus an offload estimate ("≈ 1.0 GB/s · 500 GB ≈ 8 min"). A ⏏ button ejects safely; a gauge button **measures true write/read speed** with a short uncached test file.
+- **Drives with real numbers** — negotiated copy speed plus an offload estimate ("≈ 1.0 GB/s · 500 GB ≈ 8 min") and a capacity line ("1 TB drive · 487 GB free", warns when nearly full). A ⏏ button ejects safely; a gauge button **measures true write/read speed** with a short uncached test file.
+- **Live copy speed** — open the menu during a transfer and watch it in real time: "Copying right now ≈ 0.8 GB/s". Sampled only while the menu is open, so idle CPU stays ≈ 0.
 - **Bottlenecks, with the fix** — a drive on a bad link goes red with specific advice ("move it to the left port — the right one is USB-2 only", "swap the cable for one marked 10Gbps/SS").
 - **A port database of every Apple Silicon Mac** — including ports macOS can't see while empty (USB-A, the M4 mini's front pair) and asymmetric ones (the MacBook Neo's fast-left / slow-right).
 
-Everything updates the instant you plug or unplug something (IOKit notifications — idle CPU ≈ 0%).
+Everything updates the instant you plug or unplug something (IOKit notifications — idle CPU ≈ 0%). Updates install themselves: when a new version is out, a one-click **update now** button downloads it, verifies the Developer ID signature, and relaunches.
 
 ## Install
 
