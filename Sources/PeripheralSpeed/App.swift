@@ -13,6 +13,15 @@ struct PeripheralSpeedApp: App {
             Self.snapshotAbout(to: args[i + 1])
             exit(0)
         }
+        if args.contains("--install-update") {
+            // dev/test hook: run the full self-update synchronously
+            if let err = UpdateChecker.performUpdate() {
+                print("update failed: \(err)")
+                exit(1)
+            }
+            print("update installed, new version launched")
+            exit(0)
+        }
         if let i = args.firstIndex(of: "--snapshot-panel"), i + 1 < args.count {
             Self.snapshotPanel(to: args[i + 1])
             exit(0)
@@ -63,8 +72,10 @@ struct PeripheralSpeedApp: App {
             MenuContent(scanner: scanner, updates: updates)
                 .onAppear {
                     scanner.start()
+                    scanner.startActivity()
                     updates.start()
                 }
+                .onDisappear { scanner.stopActivity() }
         } label: {
             Image(systemName: scanner.result.worstVerdict == .bad
                   ? "exclamationmark.triangle.fill"
@@ -239,6 +250,7 @@ struct MenuContent: View {
                   advice: adviceFor(d),
                   indent: indent,
                   note: rowNote(d, ejected: ejected),
+                  detail: capacityDetail(d),
                   ejecting: busy,
                   onEject: {
                       guard d.isStorage, !ejected, !busy, let bsd = d.bsdName else { return nil }
@@ -256,6 +268,9 @@ struct MenuContent: View {
         if ejected { return ("Ejected — safe to unplug.", .green) }
         if let e = scanner.ejectErrors[loc] { return (e, .orange) }
         if let e = scanner.testErrors[loc] { return (e, .orange) }
+        if let bps = scanner.activityBps[loc], bps > 20_000_000 {
+            return ("Copying right now ≈ \(Speed.format(bps / 1e9))", .blue)
+        }
         if let r = scanner.testResults[loc] {
             // orange when the drive delivers well under what its link allows
             let expected = Speed.gbps(linkMbps: d.speedMbps ?? 0)
@@ -264,6 +279,17 @@ struct MenuContent: View {
                     healthy ? .green : .orange)
         }
         return nil
+    }
+
+    /// "1 TB drive · 487 GB free" — orange when nearly full, because a
+    /// too-small drive ruins an offload as surely as a slow one.
+    private func capacityDetail(_ d: USBDevice) -> (text: String, color: Color)? {
+        guard d.isStorage, let c = scanner.capacities[d.locationID], c.total > 0 else { return nil }
+        let free = ByteCountFormatter.string(fromByteCount: c.free, countStyle: .file)
+        let total = ByteCountFormatter.string(fromByteCount: c.total, countStyle: .file)
+        let low = Double(c.free) < Double(c.total) * 0.1
+        return ("\(total) drive · \(free) free" + (low ? " — nearly full" : ""),
+                low ? .orange : .secondary)
     }
 
     /// Model-aware upgrade of a drive's advice: on a Neo a USB-2-speed
@@ -442,12 +468,24 @@ struct MenuContent: View {
                 }
             }
 
-            if let latest = updates.latest, let url = URL(string: latest.url) {
-                Link(destination: url) {
-                    Label("v\(latest.version) is out — click to get it",
+            if updates.updating {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Updating — the app will relaunch itself…").font(.caption)
+                }
+            } else if let latest = updates.latest {
+                Button {
+                    updates.installUpdate()
+                } label: {
+                    Label("v\(latest.version) is out — update now",
                           systemImage: "arrow.down.circle.fill")
                 }
                 .font(.caption)
+                if let err = updates.updateError, let url = URL(string: latest.url) {
+                    Text(err).font(.caption2).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Link("Download manually instead", destination: url).font(.caption2)
+                }
             }
 
             Divider()
@@ -615,6 +653,7 @@ struct DeviceRow: View {
     let advice: String?
     var indent: Int = 0
     var note: (text: String, color: Color)? = nil
+    var detail: (text: String, color: Color)? = nil
     var ejecting: Bool = false
     var onEject: (() -> Void)? = nil
     var onTest: (() -> Void)? = nil
@@ -661,6 +700,12 @@ struct DeviceRow: View {
                     .foregroundStyle(note.color)
                     .padding(.leading, CGFloat(indent + 1) * 14)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let detail {
+                Text(detail.text)
+                    .font(.caption2)
+                    .foregroundStyle(detail.color)
+                    .padding(.leading, CGFloat(indent + 1) * 14)
             }
         }
     }

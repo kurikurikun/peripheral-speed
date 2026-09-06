@@ -15,6 +15,14 @@ final class PeripheralScanner: ObservableObject {
     @Published var ejectedLocations: Set<Int> = []
     @Published var ejectErrors: [Int: String] = [:]
 
+    // Per-drive volume capacity (free/total bytes) and live transfer
+    // activity (bytes/sec), keyed by locationID. Activity is sampled only
+    // while the menu is open — the idle-cost promise stands.
+    @Published var capacities: [Int: (free: Int64, total: Int64)] = [:]
+    @Published var activityBps: [Int: Double] = [:]
+    private var activityTimer: Timer?
+    private var lastBlockSample: (bytes: [String: Int64], at: Date)?
+
     // Measured speed-test state, also keyed by locationID.
     @Published var testingLocations: Set<Int> = []
     @Published var testResults: [Int: (write: Double, read: Double)] = [:]  // GB/s
@@ -104,6 +112,16 @@ final class PeripheralScanner: ObservableObject {
             r.usbDevices = self.scanUSB()
             r.tbPorts = self.scanThunderbolt()
             r.modelId = Self.modelIdentifier()
+            var caps: [Int: (free: Int64, total: Int64)] = [:]
+            for d in r.usbDevices where d.isStorage {
+                if let bsd = d.bsdName, let mp = self.mountPoint(forWholeDisk: bsd) {
+                    var fs = statfs()
+                    if statfs(mp, &fs) == 0 {
+                        caps[d.locationID] = (Int64(fs.f_bavail) * Int64(fs.f_bsize),
+                                              Int64(fs.f_blocks) * Int64(fs.f_bsize))
+                    }
+                }
+            }
             DispatchQueue.main.async {
                 self.result = r
                 self.scanning = false
@@ -113,6 +131,7 @@ final class PeripheralScanner: ObservableObject {
                 self.ejectErrors = self.ejectErrors.filter { present.contains($0.key) }
                 self.testResults = self.testResults.filter { present.contains($0.key) }
                 self.testErrors = self.testErrors.filter { present.contains($0.key) }
+                self.capacities = caps
             }
         }
     }
@@ -223,6 +242,70 @@ final class PeripheralScanner: ObservableObject {
         }
         for tree in trees { walk(tree, owner: nil) }
         return map
+    }
+
+    // MARK: - live transfer activity (menu-open only)
+
+    func startActivity() {
+        guard activityTimer == nil else { return }
+        lastBlockSample = nil
+        sampleActivity()
+        activityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.sampleActivity()
+        }
+    }
+
+    func stopActivity() {
+        activityTimer?.invalidate()
+        activityTimer = nil
+        activityBps = [:]
+    }
+
+    /// Cumulative read+write bytes per whole disk, from the block-storage
+    /// driver statistics in the IO registry.
+    private func blockBytes() -> [String: Int64] {
+        var map: [String: Int64] = [:]
+        guard let trees = runPlist("/usr/sbin/ioreg",
+                                   ["-c", "IOBlockStorageDriver", "-a", "-r", "-l"])
+                as? [[String: Any]] else { return map }
+        func findBSD(_ n: [String: Any]) -> String? {
+            if n["Whole"] as? Bool == true, let b = n["BSD Name"] as? String { return b }
+            for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
+                if let f = findBSD(c) { return f }
+            }
+            return nil
+        }
+        for t in trees {
+            guard let stats = t["Statistics"] as? [String: Any],
+                  let bsd = findBSD(t) else { continue }
+            let read = (stats["Bytes (Read)"] as? NSNumber)?.int64Value ?? 0
+            let write = (stats["Bytes (Write)"] as? NSNumber)?.int64Value ?? 0
+            map[bsd] = read + write
+        }
+        return map
+    }
+
+    private func sampleActivity() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let now = Date()
+            let bytes = self.blockBytes()
+            let prev = self.lastBlockSample
+            self.lastBlockSample = (bytes, now)
+            guard let prev else { return }
+            let dt = now.timeIntervalSince(prev.at)
+            guard dt > 0.2 else { return }
+            DispatchQueue.main.async {
+                var act: [Int: Double] = [:]
+                for d in self.result.usbDevices where d.isStorage {
+                    if let bsd = d.bsdName, let cur = bytes[bsd],
+                       let old = prev.bytes[bsd], cur > old {
+                        act[d.locationID] = Double(cur - old) / dt
+                    }
+                }
+                self.activityBps = act
+            }
+        }
     }
 
     /// diskutil eject: unmounts every volume and offlines the media —
