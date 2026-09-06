@@ -12,9 +12,12 @@ final class UpdateChecker: ObservableObject {
     private static let releasesAPI =
         "https://api.github.com/repos/kurikurikun/peripheral-speed/releases/latest"
 
+    /// Called on every menu open: always re-check (one tiny API call) so
+    /// a new release shows up the next time the user looks, not a day
+    /// later. The timer only backs this up for menus that never close.
     func start() {
-        guard timer == nil else { return }
         check()
+        guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
             self?.check()
         }
