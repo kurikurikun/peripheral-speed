@@ -13,8 +13,27 @@ struct PeripheralSpeedApp: App {
             Self.snapshotAbout(to: args[i + 1])
             exit(0)
         }
+        if let i = args.firstIndex(of: "--snapshot-panel"), i + 1 < args.count {
+            Self.snapshotPanel(to: args[i + 1])
+            exit(0)
+        }
         // menu-bar only: no Dock icon, no app switcher entry
         NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
+    /// Render the live panel (real scan of this Mac) to a PNG.
+    private static func snapshotPanel(to path: String) {
+        let scanner = PeripheralScanner()
+        scanner.scanSync()
+        let content = MenuContent(scanner: scanner, updates: UpdateChecker())
+            .background(Color(nsColor: .windowBackgroundColor))
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        if let img = renderer.nsImage, let tiff = img.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
     }
 
     private static func snapshotAbout(to path: String) {

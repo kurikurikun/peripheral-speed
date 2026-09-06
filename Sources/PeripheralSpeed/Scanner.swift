@@ -86,6 +86,15 @@ final class PeripheralScanner: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
+    /// Synchronous scan for the snapshot tool — same pipeline, no queues.
+    func scanSync() {
+        var r = ScanResult()
+        r.usbDevices = scanUSB()
+        r.tbPorts = scanThunderbolt()
+        r.modelId = Self.modelIdentifier()
+        result = r
+    }
+
     func scan() {
         guard !scanning else { return }
         scanning = true
