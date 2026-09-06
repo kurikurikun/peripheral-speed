@@ -19,7 +19,7 @@ Everything updates the instant you plug or unplug something (IOKit notifications
 ## Install
 
 1. Download the latest `PeripheralSpeed-x.y.zip` from [Releases](https://github.com/kurikurikun/peripheral-speed/releases), unzip, and drag **PeripheralSpeed.app** into Applications (choose *Replace* if updating).
-2. Open it — the ⚡ appears in the menu bar. Releases from v0.17 are signed and notarized by Apple, so it opens first try. Add it to **System Settings → General → Login Items** to start at login.
+2. Open it — the ⚡ appears in the menu bar. Releases from v0.17 are signed and notarized by Apple, so it opens first try. Tick **Start at login** in the app's footer to have it open automatically after every restart.
 
 Apple Silicon only (M1 and later).
 

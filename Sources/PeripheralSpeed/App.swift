@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 @main
 struct PeripheralSpeedApp: App {
@@ -11,6 +12,20 @@ struct PeripheralSpeedApp: App {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot-about"), i + 1 < args.count {
             Self.snapshotAbout(to: args[i + 1])
+            exit(0)
+        }
+        if let i = args.firstIndex(of: "--set-login-item"), i + 1 < args.count {
+            // dev/test hook: on | off | status
+            switch args[i + 1] {
+            case "on":
+                do { try SMAppService.mainApp.register(); print("login item enabled") }
+                catch { print("failed: \(error)"); exit(1) }
+            case "off":
+                do { try SMAppService.mainApp.unregister(); print("login item disabled") }
+                catch { print("failed: \(error)"); exit(1) }
+            default:
+                print(SMAppService.mainApp.status == .enabled ? "enabled" : "not enabled")
+            }
             exit(0)
         }
         if args.contains("--install-update") {
@@ -93,6 +108,7 @@ struct PeripheralSpeedApp: App {
 struct MenuContent: View {
     @ObservedObject var scanner: PeripheralScanner
     @ObservedObject var updates: UpdateChecker
+    @State private var startAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showAbout = false
     @State private var diagCopied = false
 
@@ -496,8 +512,19 @@ struct MenuContent: View {
             Divider()
             HStack {
                 Button("Rescan") { scanner.scan() }
+                    .help("Ports also update by themselves when devices change")
                 Spacer()
-                Text("updates when devices change").font(.caption2)
+                Toggle("Start at login", isOn: $startAtLogin)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: startAtLogin) { on in
+                        do {
+                            if on { try SMAppService.mainApp.register() }
+                            else { try SMAppService.mainApp.unregister() }
+                        } catch {
+                            startAtLogin = SMAppService.mainApp.status == .enabled
+                        }
+                    }
+                    .help("Open Peripheral Speed automatically after every restart")
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
