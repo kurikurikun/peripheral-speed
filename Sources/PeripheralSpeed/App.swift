@@ -616,12 +616,12 @@ struct AboutView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if linkAsText {
-                Label("Useful? Buy us a ¥500 coffee — ko-fi.com/movementchris",
+                Label("Useful? Buy us a ¥500 matcha latte — ko-fi.com/movementchris",
                       systemImage: "cup.and.saucer.fill")
                     .font(.caption).foregroundStyle(.blue)
             } else {
                 Link(destination: URL(string: "https://ko-fi.com/movementchris")!) {
-                    Label("Useful? Buy us a ¥500 coffee", systemImage: "cup.and.saucer.fill")
+                    Label("Useful? Buy us a ¥500 matcha latte", systemImage: "cup.and.saucer.fill")
                 }
                 .font(.caption)
             }
