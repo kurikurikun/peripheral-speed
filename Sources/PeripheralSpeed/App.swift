@@ -41,6 +41,18 @@ struct PeripheralSpeedApp: App {
             Self.snapshotPanel(to: args[i + 1])
             exit(0)
         }
+        // Start-at-login defaults ON, set exactly once at first launch —
+        // the footer checkbox stays in charge afterward, and macOS posts
+        // its own "added as login item" notice so nothing is hidden.
+        // Only for the installed copy, never for dev builds.
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "didDefaultLoginItem"),
+           Bundle.main.bundlePath == "/Applications/PeripheralSpeed.app" {
+            defaults.set(true, forKey: "didDefaultLoginItem")
+            if SMAppService.mainApp.status != .enabled {
+                try? SMAppService.mainApp.register()
+            }
+        }
         // menu-bar only: no Dock icon, no app switcher entry
         NSApplication.shared.setActivationPolicy(.accessory)
     }
