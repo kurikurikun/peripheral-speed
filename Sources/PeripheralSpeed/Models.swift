@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.24"
+    static let version = "0.25"
     static var display: String { "v\(version)" }
 }
 
@@ -173,10 +173,19 @@ struct USBDevice: Identifiable {
     /// mounted/ejectable media — what `diskutil eject` wants.
     var bsdName: String? = nil
 
+    /// Card readers (SD/CFexpress) legitimately negotiate 5 Gb/s — the
+    /// cards themselves are the limit, so no "is your SSD halved?" caution.
+    var looksLikeCardReader: Bool {
+        let n = " " + name.uppercased() + " "
+        return ["SD", "CF", "CFEXPRESS", "CARD", "READER"].contains {
+            n.contains(" " + $0 + " ") || n.contains(" " + $0 + ".")
+        }
+    }
+
     var verdict: Verdict {
         guard let mbps = speedMbps else { return .good }
         if isStorage && mbps <= 480 { return .bad }
-        if isStorage && mbps == 5_000 { return .caution }
+        if isStorage && mbps == 5_000 && !looksLikeCardReader { return .caution }
         return .good
     }
 

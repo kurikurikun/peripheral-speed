@@ -507,6 +507,9 @@ final class PeripheralScanner: ObservableObject {
 
     static func busKind(_ controllerClass: String) -> USBBus {
         if controllerClass.contains("XHCITR") { return .thunderbolt }
+        // Apple Silicon has no built-in EHCI/OHCI — those only arrive
+        // tunneled behind Thunderbolt (e.g. Pro Display XDR's USB2 side).
+        if controllerClass.contains("EHCI") || controllerClass.contains("OHCI") { return .thunderbolt }
         if controllerClass.contains("EmbeddedUSBXHCIFL") { return .usbA }
         if controllerClass.contains("USBXHCI") { return .usbC }
         return .unknown

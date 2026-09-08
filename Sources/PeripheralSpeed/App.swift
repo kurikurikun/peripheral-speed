@@ -143,10 +143,42 @@ struct MenuContent: View {
         return out
     }
 
+    /// Search EVERY device in every TB chain — a display can sit behind a
+    /// dock (e.g. Pro Display XDR daisy-chained off an Anker TB4 dock).
     private var tbDisplayName: String? {
-        scanner.result.tbPorts
-            .compactMap { $0.deviceNames.first }
+        scanner.result.tbPorts.flatMap(\.deviceNames)
             .first { $0.localizedCaseInsensitiveContains("display") }
+    }
+
+    private var tbAllNames: [String] { scanner.result.tbPorts.flatMap(\.deviceNames) }
+
+    private func matchesTBDevice(_ name: String) -> Bool {
+        tbAllNames.contains {
+            $0.localizedCaseInsensitiveContains(name) || name.localizedCaseInsensitiveContains($0)
+        }
+    }
+
+    /// A TB dock also exposes a "USB companion" plane on the Mac's own
+    /// controller, betrayed by a billboard device named like the TB device
+    /// (e.g. "Thunderbolt4 Mini Dock" under a built-in controller). That
+    /// controller is the SAME physical port as the TB row — never a second
+    /// occupied port.
+    private var companionControllers: Set<Int> {
+        var out = Set<Int>()
+        for b in blocks where b.root.bus == .usbC {
+            if ([b.root.name] + b.children.map(\.name)).contains(where: matchesTBDevice) {
+                out.insert(b.root.controllerID)
+            }
+        }
+        return out
+    }
+
+    /// Real devices living on companion planes (a drive in the dock's USB
+    /// port) — shown under the TB row; hubs and billboards stay hidden.
+    private var companionExtras: [USBDevice] {
+        blocks.filter { companionControllers.contains($0.root.controllerID) }
+            .flatMap { [$0.root] + $0.children }
+            .filter { $0.isStorage || (!$0.isHub && !matchesTBDevice($0.name)) }
     }
 
     private var displayShortName: String {
@@ -161,8 +193,9 @@ struct MenuContent: View {
     private func isDisplayInternalHub(_ d: USBDevice) -> Bool {
         guard tbDisplayName != nil, d.isHub, d.depth == 0,
               d.bus == .thunderbolt || d.bus == .unknown else { return false }
-        return (d.vendor ?? "").localizedCaseInsensitiveContains("apple")
-            && d.name.localizedCaseInsensitiveContains("hub")
+        let appleOrAnon = (d.vendor ?? "apple").localizedCaseInsensitiveContains("apple")
+        return appleOrAnon && (d.name.localizedCaseInsensitiveContains("hub")
+                               || d.name == "IOUSBHostDevice")
     }
 
     /// On models with usbCFront > 0 the front USB-C ports live behind an
@@ -188,7 +221,10 @@ struct MenuContent: View {
         blocks.filter { !isDisplayInternalHub($0.root) && !isFrontInternalHub($0.root) }
     }
     private var usbABlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .usbA } }
-    private var usbCBlocks: [USBBlock] { macBlocks.filter { $0.root.bus != .usbA } }
+    private var usbCBlocks: [USBBlock] {
+        macBlocks.filter { $0.root.bus != .usbA
+            && !companionControllers.contains($0.root.controllerID) }
+    }
 
     /// Devices sharing a controller share a physical USB-C port — show the
     /// first as the port, nest the rest under it.
@@ -208,7 +244,7 @@ struct MenuContent: View {
     /// model's known ports instead.
     private var freeUSBCCount: Int {
         let usbModePorts = Set(usbCBlocks.filter { $0.root.bus == .usbC }
-            .map(\.root.controllerID)).count
+            .map(\.root.controllerID)).count   // companions already excluded
         if let inv = scanner.result.inventory, !inv.hasThunderbolt {
             return max(0, inv.usbC - usbModePorts)
         }
@@ -273,7 +309,8 @@ struct MenuContent: View {
         let ejected = scanner.ejectedLocations.contains(loc)
         let busy = scanner.ejectingLocations.contains(loc) || scanner.testingLocations.contains(loc)
         DeviceRow(dot: dot(for: d),
-                  title: title ?? d.name,
+                  title: title ?? (d.name == "IOUSBHostDevice"
+                                   ? (d.vendor ?? "USB device") : d.name),
                   subtitle: ejected ? "" : subtitle(d),
                   advice: adviceFor(d),
                   indent: indent,
@@ -426,6 +463,9 @@ struct MenuContent: View {
                                   title: "\(backTag) — \(p.deviceNames.first ?? "?")",
                                   subtitle: tbSubtitle(p),
                                   advice: p.advice)
+                    }
+                    ForEach(companionExtras) { d in
+                        deviceRow(d, indent: 1)
                     }
                     ForEach(usbCRows, id: \.block.id) { row in
                         let extra = row.first ? 0 : 1
