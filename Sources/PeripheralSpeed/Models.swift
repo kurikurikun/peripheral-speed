@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.26"
+    static let version = "0.27"
     static var display: String { "v\(version)" }
 }
 
@@ -208,8 +208,16 @@ struct TBPort: Identifiable {
     let deviceNames: [String]
     let gbps: Double?
 
+    /// Thunderbolt 1/2-era Apple displays max out at 10-20 Gb/s by
+    /// design — a slow link to one is its nature, not a cable problem.
+    var isLegacyDisplay: Bool {
+        deviceNames.contains { $0.localizedCaseInsensitiveContains("thunderbolt display") }
+            && !(deviceNames.contains { $0.localizedCaseInsensitiveContains("pro display") })
+    }
+
     var verdict: Verdict {
         guard let g = gbps else { return .good }
+        if g <= 20 && isLegacyDisplay { return .good }
         return g <= 20 ? .caution : .good
     }
 

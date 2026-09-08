@@ -650,6 +650,9 @@ struct MenuContent: View {
     }
 
     private func tbSubtitle(_ p: TBPort) -> String {
+        if p.isLegacyDisplay, let g = p.gbps, g <= 20 {
+            return "older display — ≈ \(Speed.gbCopy(linkMbps: g * 1_000)) is its max"
+        }
         guard p.verdict != .good, let g = p.gbps else { return "" }
         return "caps drives at ≈ \(Speed.gbCopy(linkMbps: g * 1_000))"
     }
