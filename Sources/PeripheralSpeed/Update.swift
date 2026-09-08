@@ -99,26 +99,41 @@ final class UpdateChecker: ObservableObject {
                                          requirement) == errSecSuccess else {
             return "Update failed signature verification — not installed."
         }
-        // swap: old aside (running process keeps its inode), new in place
-        let aside = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("psold-\(UUID().uuidString).app")
-        do {
-            try FileManager.default.moveItem(atPath: currentPath, toPath: aside.path)
-        } catch { return "Couldn't replace the installed app: \(error.localizedDescription)" }
-        do {
-            try FileManager.default.moveItem(at: newApp, to: URL(fileURLWithPath: currentPath))
-        } catch {
-            try? FileManager.default.moveItem(atPath: aside.path, toPath: currentPath)
-            return "Install failed; the old version was kept."
-        }
-        try? FileManager.default.removeItem(at: aside)
-        // relaunch the new version and bow out
-        let open = Process()
-        open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        open.arguments = ["-n", currentPath]
-        try? open.run()
+        // Move the verified app to a STABLE staging path (out of `work`,
+        // which `defer` deletes) for the helper to consume.
+        let staged = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("psnew-\(UUID().uuidString).app")
+        do { try FileManager.default.moveItem(at: newApp, to: staged) }
+        catch { return "Couldn't stage the update." }
+
+        // Hand the swap to a detached shell: a plain `mv` run as the user,
+        // after we quit, isn't blocked by the App-Management restriction
+        // that silently stops a running GUI app from replacing an app in
+        // /Applications. It waits for our PID, swaps, relaunches.
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let script = """
+        while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done
+        /bin/rm -rf \(shellQuote(currentPath))
+        /bin/mv \(shellQuote(staged.path)) \(shellQuote(currentPath))
+        /usr/bin/xattr -dr com.apple.quarantine \(shellQuote(currentPath)) 2>/dev/null
+        /usr/bin/open -n \(shellQuote(currentPath))
+        """
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = ["-c", script]
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        do { try helper.run() }
+        catch { return "Couldn't start the updater helper." }
+
+        // The helper is now waiting for us — quit so it can swap.
         DispatchQueue.main.async { exit(0) }
         return nil
+    }
+
+    /// Single-quote a path for /bin/sh (wrap in quotes, escape embedded ').
+    static func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     static func isNewer(_ a: String, than b: String) -> Bool {
