@@ -466,7 +466,8 @@ struct MenuContent: View {
     /// nature, or with nothing better free, gets silence: silence means
     /// "already on the best port".
     private func moveSuggestion(_ d: USBDevice) -> (text: String, color: Color)? {
-        guard d.isStorage, let mbps = d.speedMbps, bestFreeMacMbps > mbps else { return nil }
+        guard d.isStorage, d.bsdName != nil,   // real inserted media only
+              let mbps = d.speedMbps, bestFreeMacMbps > mbps else { return nil }
         if displayDeviceIDs.contains(d.id), let uplink = displayUplinkMbps, mbps >= uplink {
             return ("Tip: a free Mac port would give this drive up to ≈ \(Speed.gbCopy(linkMbps: bestFreeMacMbps)) — worth moving for big copies.",
                     .blue)
@@ -690,6 +691,10 @@ struct MenuContent: View {
     /// speed once a test has run, the link estimate before that.
     private func subtitle(_ d: USBDevice) -> String {
         guard d.isStorage, let mbps = d.speedMbps else { return "" }
+        // A storage device with no mounted media is an empty bay/slot
+        // (an empty dock enclosure, a card reader with no card) — no
+        // copy estimate applies.
+        if d.bsdName == nil { return "empty — no disk inserted" }
         let g = scanner.testResults[d.locationID]?.write ?? Speed.gbps(linkMbps: mbps)
         return "≈ \(Speed.format(g)) · 500 GB \(Speed.eta(gb: 500, gbPerSec: g))"
     }
@@ -705,6 +710,7 @@ struct MenuContent: View {
     /// Green is reserved for drives at full speed; gray means "fine, and
     /// speed doesn't apply"; yellow/red mark real slowdowns.
     private func dot(for d: USBDevice) -> Color {
+        if d.isStorage && d.bsdName == nil { return .gray }  // empty bay
         if d.verdict == .good && !d.isStorage { return .gray }
         return color(d.verdict)
     }

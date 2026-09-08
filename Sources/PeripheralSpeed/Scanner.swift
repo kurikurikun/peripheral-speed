@@ -470,9 +470,14 @@ final class PeripheralScanner: ObservableObject {
                 speed = Self.legacySpeeds[code]
             }
             var childDepth = depth
-            if let speed {
-                let name = (n["USB Product Name"] as? String)
-                    ?? (n["IORegistryEntryName"] as? String) ?? "?"
+            let rawName = (n["USB Product Name"] as? String)
+                ?? (n["IORegistryEntryName"] as? String) ?? "?"
+            // USB Billboard Devices (bDeviceClass 0x11) are alt-mode
+            // negotiation artifacts, not real peripherals — skip entirely.
+            let isBillboard = (n["bDeviceClass"] as? Int == 0x11)
+                || rawName.localizedCaseInsensitiveContains("billboard")
+            if let speed, !isBillboard {
+                let name = rawName
                 let loc = n["locationID"] as? Int
                 let storage = hasMassStorage(n) || (loc.map { storageLocs.contains($0) } ?? false)
                 let hub = (n["bDeviceClass"] as? Int == 9)
