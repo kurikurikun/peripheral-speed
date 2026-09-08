@@ -446,14 +446,36 @@ struct MenuContent: View {
         return 0
     }
 
-    /// A drive saturating its display's lane, with a faster free Mac port
-    /// available, is worth moving — suggest it, gently.
+    /// The nearest hub above a nested device, in scan order.
+    private func parentHubSpeed(of d: USBDevice) -> Double? {
+        for b in blocks {
+            let seq = [b.root] + b.children
+            guard let idx = seq.firstIndex(where: { $0.id == d.id }), idx > 0 else { continue }
+            for j in stride(from: idx - 1, through: 0, by: -1)
+            where seq[j].depth == d.depth - 1 {
+                return seq[j].isHub ? seq[j].speedMbps : nil
+            }
+            return nil
+        }
+        return nil
+    }
+
+    /// Placement coaching: a drive saturating the lane above it (display
+    /// uplink or hub plane) while a faster free Mac port sits empty is
+    /// worth moving — say so, with the gain. A drive slow by its own
+    /// nature, or with nothing better free, gets silence: silence means
+    /// "already on the best port".
     private func moveSuggestion(_ d: USBDevice) -> (text: String, color: Color)? {
-        guard d.isStorage, displayDeviceIDs.contains(d.id),
-              let mbps = d.speedMbps, let uplink = displayUplinkMbps,
-              mbps >= uplink, bestFreeMacMbps > mbps else { return nil }
-        return ("Tip: a free Mac port would give this drive up to ≈ \(Speed.gbCopy(linkMbps: bestFreeMacMbps)) — worth moving for big copies.",
-                .blue)
+        guard d.isStorage, let mbps = d.speedMbps, bestFreeMacMbps > mbps else { return nil }
+        if displayDeviceIDs.contains(d.id), let uplink = displayUplinkMbps, mbps >= uplink {
+            return ("Tip: a free Mac port would give this drive up to ≈ \(Speed.gbCopy(linkMbps: bestFreeMacMbps)) — worth moving for big copies.",
+                    .blue)
+        }
+        if d.depth > 0, let hubSpeed = parentHubSpeed(of: d), mbps >= hubSpeed {
+            return ("Tip: this hub is the limit — straight into a free Mac port this could reach ≈ \(Speed.gbCopy(linkMbps: bestFreeMacMbps)).",
+                    .blue)
+        }
+        return nil
     }
 
     private var frontRows: [(d: USBDevice, indent: Int)] {
