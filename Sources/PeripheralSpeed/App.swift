@@ -349,6 +349,7 @@ struct MenuContent: View {
         if let bps = scanner.activityBps[loc], bps > 20_000_000 {
             return ("Copying right now ≈ \(Speed.format(bps / 1e9))", .blue)
         }
+        if let tip = moveSuggestion(d) { return tip }
         if let r = scanner.testResults[loc] {
             // orange when the drive delivers well under what its link allows
             let expected = Speed.gbps(linkMbps: d.speedMbps ?? 0)
@@ -431,6 +432,28 @@ struct MenuContent: View {
 
     private var displayRows: [(d: USBDevice, indent: Int)] {
         mergedHubRows(displayBlocks, excluding: isDisplayBuiltin)
+    }
+
+    private var displayDeviceIDs: Set<String> { Set(displayRows.map(\.d.id)) }
+
+    private var displayUplinkMbps: Double? { displayBlocks.compactMap(\.root.speedMbps).max() }
+
+    /// What a USB drive would negotiate on the best FREE Mac port right
+    /// now (USB mode: 10 Gb/s on any free USB-C; USB-A per model).
+    private var bestFreeMacMbps: Double {
+        if freeUSBCCount > 0 || freeFrontCount > 0 { return 10_000 }
+        if freeUSBACount > 0 { return Double(scanner.result.inventory?.usbAGbps ?? 5) * 1_000 }
+        return 0
+    }
+
+    /// A drive saturating its display's lane, with a faster free Mac port
+    /// available, is worth moving — suggest it, gently.
+    private func moveSuggestion(_ d: USBDevice) -> (text: String, color: Color)? {
+        guard d.isStorage, displayDeviceIDs.contains(d.id),
+              let mbps = d.speedMbps, let uplink = displayUplinkMbps,
+              mbps >= uplink, bestFreeMacMbps > mbps else { return nil }
+        return ("Tip: a free Mac port would give this drive up to ≈ \(Speed.gbCopy(linkMbps: bestFreeMacMbps)) — worth moving for big copies.",
+                .blue)
     }
 
     private var frontRows: [(d: USBDevice, indent: Int)] {
