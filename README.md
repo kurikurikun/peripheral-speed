@@ -4,7 +4,9 @@ A Mac menu-bar app that answers one question: **how fast can data actually copy 
 
 Marketing says "10Gbps". Reality is a drive silently stuck at USB-2 behind the wrong cable, the wrong hub, or the wrong hole. Peripheral Speed reads what every device *actually negotiated*, translates everything into one honest unit (real-world **GB/s**), and tells you what to fix.
 
-![About panel](docs/about.png)
+![Peripheral Speed coaching a drive to a faster port](docs/coaching.png)
+
+It even coaches placement: a drive limited by the hub or display it's plugged into gets a tip naming the faster free Mac port it could use. No tip means you're already on the best port.
 
 ## What it shows
 

@@ -817,9 +817,13 @@ struct DeviceRow: View {
                         .help("Eject so it's safe to unplug")
                 }
                 Text(title).font(.system(.body, design: .rounded))
-                Spacer()
+                    .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                Spacer(minLength: 6)
                 if !subtitle.isEmpty {
+                    // the speed/ETA is the point — never let it truncate;
+                    // the device name shortens first if space is tight.
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).fixedSize().layoutPriority(2)
                 }
                 if !ejecting, let onTest {
                     Button(action: onTest) { Image(systemName: "gauge") }
