@@ -152,9 +152,17 @@ struct MenuContent: View {
 
     private var tbAllNames: [String] { scanner.result.tbPorts.flatMap(\.deviceNames) }
 
+    /// Vendors punctuate inconsistently across planes ("Thunderbolt 4"
+    /// vs "Thunderbolt4") — compare with spaces stripped, case folded.
     private func matchesTBDevice(_ name: String) -> Bool {
-        tbAllNames.contains {
-            $0.localizedCaseInsensitiveContains(name) || name.localizedCaseInsensitiveContains($0)
+        func norm(_ s: String) -> String {
+            s.lowercased().replacingOccurrences(of: " ", with: "")
+        }
+        let n = norm(name)
+        guard n.count >= 6 else { return false }
+        return tbAllNames.contains {
+            let t = norm($0)
+            return t.contains(n) || n.contains(t)
         }
     }
 
