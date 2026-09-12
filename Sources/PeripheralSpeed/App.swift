@@ -841,7 +841,8 @@ struct CalculatorView: View {
                     Text(dest.measured ? "measured"
                                        : "estimate · run the gauge test for the real speed")
                         .font(.caption2)
-                        .foregroundStyle(dest.measured ? .green : .tertiary)
+                        .foregroundStyle(dest.measured ? AnyShapeStyle(.green)
+                                                       : AnyShapeStyle(.tertiary))
                         .padding(.leading, 16)
                 }
             }
