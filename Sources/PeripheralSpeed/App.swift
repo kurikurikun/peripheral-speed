@@ -312,9 +312,6 @@ struct MenuContent: View {
         }
     }
 
-    /// Every USB device renders through this: dot, subtitle, advice, and —
-    /// for a drive with mounted media — the test/eject buttons and outcomes.
-    @ViewBuilder
     /// A drive's display name: its VOLUME name (what Finder shows) when it
     /// has mounted media, else the device/enclosure name. So "et" rather
     /// than "RTL9210" for a mounted drive — matching the offload path.
@@ -325,6 +322,9 @@ struct MenuContent: View {
         return d.name == "IOUSBHostDevice" ? (d.vendor ?? "USB device") : d.name
     }
 
+    /// Every USB device renders through this: dot, subtitle, advice, and —
+    /// for a drive with mounted media — the test/eject buttons and outcomes.
+    @ViewBuilder
     private func deviceRow(_ d: USBDevice, title: String? = nil, indent: Int = 0) -> some View {
         let loc = d.locationID
         let ejected = scanner.ejectedLocations.contains(loc)
