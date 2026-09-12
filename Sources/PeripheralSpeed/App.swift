@@ -230,9 +230,11 @@ struct MenuContent: View {
     }
     private var usbABlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .usbA } }
     private var usbCBlocks: [USBBlock] {
-        macBlocks.filter { $0.root.bus != .usbA
+        macBlocks.filter { $0.root.bus != .usbA && $0.root.bus != .builtInSD
             && !companionControllers.contains($0.root.controllerID) }
     }
+    /// Built-in SDXC slot rows (MacBook Pro) — read off PCIe, not USB.
+    private var sdBlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .builtInSD } }
 
     /// Devices sharing a controller share a physical USB-C port — show the
     /// first as the port, nest the rest under it.
@@ -569,6 +571,13 @@ struct MenuContent: View {
                                   subtitle: "≈ \(Speed.gbCopy(linkMbps: Double(gbits) * 1_000))",
                                   advice: nil)
                             .help("Marketed as \(gbits) Gb/s — gigaBITS. ÷10 for real-world copying in gigaBYTES.")
+                    }
+                    ForEach(sdBlocks) { b in
+                        deviceRow(b.root,
+                                  title: b.root.bsdName == nil
+                                    ? "SD card slot — empty"
+                                    : "SD card — \(b.root.name)")
+                            .help("Built-in SDXC slot")
                     }
                 }
 

@@ -111,8 +111,13 @@ final class PeripheralScanner: ObservableObject {
             guard let self else { return }
             var r = ScanResult()
             r.usbDevices = self.scanUSB()
-            r.tbPorts = self.scanThunderbolt()
             r.modelId = Self.modelIdentifier()
+            // Built-in SDXC slot (MacBook Pro) is PCIe, invisible to the
+            // USB scan — read it separately and inject synthetic rows.
+            if PortInventory.known[r.modelId]?.hasSDSlot == true {
+                r.usbDevices += self.scanCardReaders()
+            }
+            r.tbPorts = self.scanThunderbolt()
             var caps: [Int: (free: Int64, total: Int64)] = [:]
             var mps: [Int: String] = [:]
             for d in r.usbDevices where d.isStorage {
@@ -174,6 +179,20 @@ final class PeripheralScanner: ObservableObject {
         for p in result.tbPorts {
             lines.append("  \(p.busName): \(p.speedText.isEmpty ? "-" : p.speedText)"
                 + " devices=[\(p.deviceNames.joined(separator: ", "))]")
+        }
+        // Built-in SD reader (MacBook Pro) keys vary by macOS — capture raw.
+        if let arr = runPlist("/usr/sbin/system_profiler",
+                              ["-xml", "SPCardReaderDataType"]) as? [[String: Any]],
+           let readers = arr.first?["_items"] as? [[String: Any]] {
+            lines.append("")
+            lines.append("Card readers (built-in SDXC):")
+            for r in readers {
+                lines.append("  reader keys: \(r.keys.sorted().joined(separator: ", "))")
+                for c in r["_items"] as? [[String: Any]] ?? [] {
+                    let kv = c.compactMap { k, v in (v is String || v is NSNumber) ? "\(k)=\(v)" : nil }
+                    lines.append("    card: \(kv.sorted().joined(separator: " | "))")
+                }
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -438,6 +457,53 @@ final class PeripheralScanner: ObservableObject {
         let rSecs = max(Date().timeIntervalSince(rStart), 0.001)
         let readGBps = Double(readBytes) / rSecs / 1e9
         return ((write: writeGBps, read: readGBps), nil)
+    }
+
+    /// The built-in SDXC slot (MacBook Pro) is PCIe, not USB. Read it via
+    /// SPCardReaderDataType and synthesize storage rows so the rest of the
+    /// app (capacity, eject, speed test) treats an inserted card like any
+    /// other drive. bsd/volume come straight from the reader report.
+    private func scanCardReaders() -> [USBDevice] {
+        guard let arr = runPlist("/usr/sbin/system_profiler",
+                                 ["-xml", "SPCardReaderDataType"]) as? [[String: Any]],
+              let readers = arr.first?["_items"] as? [[String: Any]] else { return [] }
+        // Whole-disk BSD like "disk8" (not a partition "disk8s1"), from any
+        // key containing "bsd" — the report's key names vary by macOS.
+        func wholeDiskBSD(_ card: [String: Any]) -> String? {
+            let bsds = card.compactMap { k, v -> String? in
+                guard k.lowercased().contains("bsd"), let s = v as? String,
+                      s.hasPrefix("disk") else { return nil }
+                // trim any partition suffix: disk8s1 -> disk8
+                if let r = s.range(of: #"^disk\d+"#, options: .regularExpression) {
+                    return String(s[r])
+                }
+                return s
+            }
+            return bsds.first
+        }
+        var out: [USBDevice] = []
+        var idx = 0
+        for reader in readers {
+            let cards = reader["_items"] as? [[String: Any]] ?? []
+            if cards.isEmpty {
+                out.append(sdDevice(name: "SD card slot", bsd: nil, index: idx)); idx += 1
+                continue
+            }
+            for card in cards {
+                let disk = wholeDiskBSD(card)
+                let volName = disk.flatMap { mountPoint(forWholeDisk: $0) }
+                    .map { URL(fileURLWithPath: $0).lastPathComponent }
+                out.append(sdDevice(name: volName ?? "SD card", bsd: disk, index: idx))
+                idx += 1
+            }
+        }
+        return out
+    }
+
+    private func sdDevice(name: String, bsd: String?, index: Int) -> USBDevice {
+        USBDevice(name: name, vendor: nil, speedMbps: nil, speedLabel: "SD card slot",
+                  isStorage: true, isHub: false, depth: 0, bus: .builtInSD,
+                  locationID: 0x5D_0000 + index, controllerID: -2, bsdName: bsd)
     }
 
     private func scanUSB() -> [USBDevice] {

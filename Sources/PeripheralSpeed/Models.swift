@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.32"
+    static let version = "0.33"
     static var display: String { "v\(version)" }
 }
 
@@ -46,6 +46,10 @@ enum Speed {
 /// (i.e. behind a dock or display).
 enum USBBus {
     case usbA, usbC, thunderbolt, unknown
+    /// The built-in SDXC card slot on MacBook Pro 14″/16″ — wired to
+    /// PCIe, not USB, so it's read separately via SPCardReaderDataType
+    /// and injected as a synthetic device.
+    case builtInSD
 }
 
 /// What ports a given Mac model physically has — macOS can't enumerate
@@ -69,6 +73,9 @@ struct PortInventory {
     /// controller (M4-family Mac mini): distinguishable from the back
     /// Thunderbolt ports, and slower (10 Gb/s).
     var usbCFront: Int = 0
+    /// Built-in SDXC card slot (MacBook Pro 14″/16″). PCIe, so the app
+    /// reads it via SPCardReaderDataType rather than the USB tree.
+    var hasSDSlot: Bool = false
 }
 
 struct USBCPort {
@@ -143,6 +150,10 @@ extension PortInventory {
         add(["Mac17,14", "Mac17,15"], .init(marketingName: "Mac Studio (M5)", usbC: 6, usbA: 2, usbAGbps: 10))
         add(["Mac14,8"], .init(marketingName: "Mac Pro (M2 Ultra)", usbC: 8, usbA: 2, usbAGbps: 10))
 
+        // Every MacBook Pro 14″/16″ (M1 Pro onward) has a built-in SDXC slot.
+        for (id, inv) in t where inv.marketingName.contains("MacBook Pro") {
+            t[id]!.hasSDSlot = true
+        }
         return t
     }()
 }
