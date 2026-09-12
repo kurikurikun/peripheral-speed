@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.37"
+    static let version = "0.38"
     static var display: String { "v\(version)" }
 }
 
@@ -195,6 +195,9 @@ struct USBDevice: Identifiable {
 
     var verdict: Verdict {
         guard let mbps = speedMbps else { return .good }
+        // An empty enclosure (no media) is not a bottleneck — nothing is
+        // flowing through it, so a slow link is nothing to warn about.
+        if isStorage && bsdName == nil { return .good }
         if isStorage && mbps <= 480 { return .bad }
         if isStorage && mbps == 5_000 && !looksLikeCardReader { return .caution }
         return .good
