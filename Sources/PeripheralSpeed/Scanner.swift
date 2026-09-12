@@ -20,6 +20,9 @@ final class PeripheralScanner: ObservableObject {
     // while the menu is open — the idle-cost promise stands.
     @Published var capacities: [Int: (free: Int64, total: Int64)] = [:]
     @Published var activityBps: [Int: Double] = [:]
+    /// locationID -> the drive's mounted volume path (/Volumes/…), for
+    /// generating offload commands.
+    @Published var mountPaths: [Int: String] = [:]
     private var mountPoints: [Int: String] = [:]
     private var activityTimer: Timer?
     private var lastBlockSample: (bytes: [String: Int64], at: Date)?
@@ -141,6 +144,7 @@ final class PeripheralScanner: ObservableObject {
                 self.testErrors = self.testErrors.filter { present.contains($0.key) }
                 self.capacities = caps
                 self.mountPoints = mps
+                self.mountPaths = mps
             }
         }
     }

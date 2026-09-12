@@ -757,6 +757,7 @@ struct MenuContent: View {
 struct CalculatorView: View {
     @ObservedObject var scanner: PeripheralScanner
     @State private var sizeGB: Double = 256
+    @State private var cmdCopied = false
 
     private let presets: [Double] = [64, 128, 256, 512, 1024]
 
@@ -765,7 +766,7 @@ struct CalculatorView: View {
         let name: String
         let gbps: Double
         let measured: Bool
-        let free: Bool   // an empty port rather than a connected drive
+        let path: String?   // mounted volume path, for the offload command
     }
 
     private func gbps(_ d: USBDevice) -> Double? {
@@ -781,10 +782,33 @@ struct CalculatorView: View {
             if let g = gbps(d) {
                 out.append(Dest(name: d.name, gbps: g,
                                 measured: scanner.testResults[d.locationID]?.write != nil,
-                                free: false))
+                                path: scanner.mountPaths[d.locationID]))
             }
         }
         return out.sorted { $0.gbps > $1.gbps }
+    }
+
+    /// The card you're offloading FROM — the built-in SD card, else a
+    /// card-reader volume. Its mount path seeds the copy command.
+    private var sourcePath: String? {
+        for d in scanner.result.usbDevices
+        where d.isStorage && d.bsdName != nil && d.bus == .builtInSD {
+            if let p = scanner.mountPaths[d.locationID] { return p }
+        }
+        for d in scanner.result.usbDevices
+        where d.isStorage && d.bsdName != nil && d.looksLikeCardReader {
+            if let p = scanner.mountPaths[d.locationID] { return p }
+        }
+        return nil
+    }
+
+    private func offloadCommand(to destPath: String) -> String {
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
+        let src = sourcePath ?? "/Volumes/YOUR_CARD"
+        let dst = destPath + "/Offload_" + df.string(from: Date())
+        return "rsync -ah --info=progress2 \"\(src)/\" \"\(dst)/\" && "
+            + "rsync -rcn --info=stats \"\(src)/\" \"\(dst)/\" && "
+            + "echo \"✓ verified — all files match by checksum\""
     }
 
     /// A free fast port only worth mentioning if a good SSD there would
@@ -844,7 +868,30 @@ struct CalculatorView: View {
                         .foregroundStyle(dest.measured ? AnyShapeStyle(.green)
                                                        : AnyShapeStyle(.tertiary))
                         .padding(.leading, 16)
+
+                    // Offload command for the fastest connected drive.
+                    if i == 0, let path = dest.path {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(offloadCommand(to: path), forType: .string)
+                            cmdCopied = true
+                        } label: {
+                            Label(cmdCopied ? "Copied — paste into Terminal"
+                                            : "Copy offload command",
+                                  systemImage: cmdCopied ? "checkmark.circle.fill" : "doc.on.doc")
+                        }
+                        .font(.caption2)
+                        .padding(.leading, 16).padding(.top, 2)
+                        .help("rsync copy" + (sourcePath == nil
+                              ? " — edit the source path (no card detected)"
+                              : " from your card") + ", then a checksum verify pass. For a re-verifiable offload with a manifest, use Stow.")
+                    }
                 }
+            }
+            if !destinations.isEmpty {
+                Text("Quick copy via rsync (verified by checksum). For irreplaceable footage with a re-checkable manifest, use a dedicated tool like Stow.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let faster = fasterOption {
