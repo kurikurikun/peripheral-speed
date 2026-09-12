@@ -757,7 +757,7 @@ struct MenuContent: View {
 struct CalculatorView: View {
     @ObservedObject var scanner: PeripheralScanner
     @State private var sizeGB: Double = 256
-    @State private var cmdCopied = false
+    @State private var copiedDestID: UUID? = nil
 
     private let presets: [Double] = [64, 128, 256, 512, 1024]
 
@@ -862,30 +862,33 @@ struct CalculatorView: View {
                             .foregroundStyle(i == 0 ? .primary : .secondary)
                             .fixedSize()
                     }
-                    Text(dest.measured ? "measured"
-                                       : "estimate · run the gauge test for the real speed")
-                        .font(.caption2)
-                        .foregroundStyle(dest.measured ? AnyShapeStyle(.green)
-                                                       : AnyShapeStyle(.tertiary))
-                        .padding(.leading, 16)
-
-                    // Offload command for the fastest connected drive.
-                    if i == 0, let path = dest.path {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(offloadCommand(to: path), forType: .string)
-                            cmdCopied = true
-                        } label: {
-                            Label(cmdCopied ? "Copied — paste into Terminal"
-                                            : "Copy offload command",
-                                  systemImage: cmdCopied ? "checkmark.circle.fill" : "doc.on.doc")
+                    HStack(spacing: 8) {
+                        Text(dest.measured ? "measured"
+                                           : "estimate · run the gauge for the real speed")
+                            .font(.caption2)
+                            .foregroundStyle(dest.measured ? AnyShapeStyle(.green)
+                                                           : AnyShapeStyle(.tertiary))
+                        Spacer(minLength: 4)
+                        // Copy the offload command for THIS drive — pick any.
+                        if let path = dest.path {
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(offloadCommand(to: path),
+                                                               forType: .string)
+                                copiedDestID = dest.id
+                            } label: {
+                                Label(copiedDestID == dest.id ? "Copied" : "Copy command",
+                                      systemImage: copiedDestID == dest.id
+                                        ? "checkmark.circle.fill" : "doc.on.doc")
+                            }
+                            .font(.caption2)
+                            .help("rsync copy" + (sourcePath == nil
+                                  ? " — edit the source path (no card detected)"
+                                  : " from your card")
+                                  + " into a dated folder on \(dest.name), then a checksum verify pass. For a re-verifiable manifest, use Stow.")
                         }
-                        .font(.caption2)
-                        .padding(.leading, 16).padding(.top, 2)
-                        .help("rsync copy" + (sourcePath == nil
-                              ? " — edit the source path (no card detected)"
-                              : " from your card") + ", then a checksum verify pass. For a re-verifiable offload with a manifest, use Stow.")
                     }
+                    .padding(.leading, 16)
                 }
             }
             if !destinations.isEmpty {
