@@ -774,6 +774,7 @@ struct CalculatorView: View {
         return nil
     }
 
+    /// Drives you can actually copy to right now, fastest first.
     private var destinations: [Dest] {
         var out: [Dest] = []
         for d in scanner.result.usbDevices where d.isStorage && d.bsdName != nil {
@@ -783,13 +784,15 @@ struct CalculatorView: View {
                                 free: false))
             }
         }
-        // A fast empty Thunderbolt/USB-C port is a valid destination too.
-        let hasFreeC = scanner.result.tbPorts.contains { $0.deviceNames.isEmpty }
-        if hasFreeC {
-            out.append(Dest(name: "a fast SSD on a free USB-C port", gbps: 2.5,
-                            measured: false, free: true))
-        }
         return out.sorted { $0.gbps > $1.gbps }
+    }
+
+    /// A free fast port only worth mentioning if a good SSD there would
+    /// beat everything currently connected — the "you could go faster" hint.
+    private var fasterOption: Double? {
+        guard scanner.result.tbPorts.contains(where: { $0.deviceNames.isEmpty }) else { return nil }
+        let bestConnected = destinations.map(\.gbps).max() ?? 0
+        return 2.5 > bestConnected * 1.15 ? 2.5 : nil
     }
 
     private func sizeLabel(_ gb: Double) -> String {
@@ -835,15 +838,23 @@ struct CalculatorView: View {
                             .foregroundStyle(i == 0 ? .primary : .secondary)
                             .fixedSize()
                     }
-                    if dest.free || !dest.measured {
-                        Text(dest.free ? "estimate — plug one in to measure"
+                    Text(dest.measured ? "measured"
                                        : "estimate · run the gauge test for the real speed")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                            .padding(.leading, 16)
-                    } else {
-                        Text("measured").font(.caption2).foregroundStyle(.green)
-                            .padding(.leading, 16)
-                    }
+                        .font(.caption2)
+                        .foregroundStyle(dest.measured ? .green : .tertiary)
+                        .padding(.leading, 16)
+                }
+            }
+
+            if let faster = fasterOption {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "lightbulb").font(.caption).foregroundStyle(.blue)
+                    Text("A fast SSD on a free USB-C port would do it in "
+                         + Speed.eta(gb: sizeGB, gbPerSec: faster).replacingOccurrences(of: "≈ ", with: "")
+                         + ".")
+                        .font(.caption2).foregroundStyle(.blue)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
