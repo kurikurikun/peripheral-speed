@@ -493,17 +493,37 @@ final class PeripheralScanner: ObservableObject {
                 let disk = wholeDiskBSD(card)
                 let volName = disk.flatMap { mountPoint(forWholeDisk: $0) }
                     .map { URL(fileURLWithPath: $0).lastPathComponent }
-                out.append(sdDevice(name: volName ?? "SD card", bsd: disk, index: idx))
+                out.append(sdDevice(name: volName ?? "SD card", bsd: disk,
+                                    specMbps: Self.sdSpecMbps(card), index: idx))
                 idx += 1
             }
         }
         return out
     }
 
-    private func sdDevice(name: String, bsd: String?, index: Int) -> USBDevice {
-        USBDevice(name: name, vendor: nil, speedMbps: nil, speedLabel: "SD card slot",
+    private func sdDevice(name: String, bsd: String?, specMbps: Double? = nil,
+                          index: Int) -> USBDevice {
+        USBDevice(name: name, vendor: nil, speedMbps: specMbps, speedLabel: "SD card slot",
                   isStorage: true, isHub: false, depth: 0, bus: .builtInSD,
                   locationID: 0x5D_0000 + index, controllerID: -2, bsdName: bsd)
+    }
+
+    /// A card's real-world speed ceiling from its SD spec version, encoded
+    /// as the app's link-Mbps (÷10 000 = GB/s). SD reports MB/s-class buses,
+    /// not a bit link, so we set the value to land on the right GB/s:
+    /// UHS-I (spec 3.x) ≈ 0.1 GB/s, UHS-II (4.x+) ≈ 0.3 GB/s. Cards vary
+    /// below this — it's an "up to"; the gauge measures the truth.
+    static func sdSpecMbps(_ card: [String: Any]) -> Double? {
+        let spec = (card["spcardreader_card_specversion"] as? String) ?? ""
+        let gbps: Double?
+        switch spec.first {
+        case "6", "7": gbps = 0.6   // SD Express-era
+        case "4", "5": gbps = 0.3   // UHS-II
+        case "3":      gbps = 0.1   // UHS-I
+        case "1", "2": gbps = 0.025 // High Speed
+        default:       gbps = nil
+        }
+        return gbps.map { $0 * 10_000 }
     }
 
     private func scanUSB() -> [USBDevice] {

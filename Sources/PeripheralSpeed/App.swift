@@ -468,6 +468,8 @@ struct MenuContent: View {
     /// nature, or with nothing better free, gets silence: silence means
     /// "already on the best port".
     private func moveSuggestion(_ d: USBDevice) -> (text: String, color: Color)? {
+        // A card in the built-in SD slot can't be "moved to a Mac port".
+        guard d.bus != .builtInSD else { return nil }
         guard d.isStorage, d.bsdName != nil,   // real inserted media only
               let mbps = d.speedMbps, bestFreeMacMbps > mbps else { return nil }
         if displayDeviceIDs.contains(d.id), let uplink = displayUplinkMbps, mbps >= uplink {
