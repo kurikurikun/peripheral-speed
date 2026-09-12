@@ -893,15 +893,9 @@ struct CalculatorView: View {
                 }
             }
 
-            Divider()
-
-            if locations.filter({ !$0.internalDrive }).isEmpty {
-                Text("Connect a drive or card to plan a copy.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                locPicker("From", $fromID, options: fromLocations, current: resolvedFrom)
-                locPicker("To", $toID, options: toLocations, current: resolvedTo)
-
+            // The time answer belongs with the size question — right below
+            // the size buttons, above the From/To pickers that refine it.
+            if !fromLocations.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
                     Text(Speed.eta(gb: sizeGB, gbPerSec: pairGBps ?? 0))
@@ -911,7 +905,16 @@ struct CalculatorView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.top, 2)
+            }
+
+            Divider()
+
+            if fromLocations.isEmpty {
+                Text("Connect a drive or card to plan a copy.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                locPicker("From", $fromID, options: fromLocations, current: resolvedFrom)
+                locPicker("To", $toID, options: toLocations, current: resolvedTo)
 
                 if let folder = destFolder {
                     Text("→ \(folder)/")

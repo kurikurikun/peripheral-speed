@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.44"
+    static let version = "0.45"
     static var display: String { "v\(version)" }
 }
 
