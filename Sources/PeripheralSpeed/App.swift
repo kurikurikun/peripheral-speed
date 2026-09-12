@@ -855,14 +855,19 @@ struct CalculatorView: View {
         gb >= 1024 ? "1 TB" : "\(Int(gb)) GB"
     }
 
+    /// You offload FROM removable media, never from a Mac-internal folder
+    /// (copying the whole Downloads folder is never the intent).
+    private var fromLocations: [Loc] { locations.filter { !$0.internalDrive } }
+    private var toLocations: [Loc] { locations }
+
     @ViewBuilder
     private func locPicker(_ title: String, _ selection: Binding<String?>,
-                           current: Loc?) -> some View {
+                           options: [Loc], current: Loc?) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
                 .frame(width: 38, alignment: .leading)
             Picker("", selection: selection) {
-                ForEach(locations) { loc in
+                ForEach(options) { loc in
                     Text(loc.name).tag(loc.id as String?)
                 }
             }
@@ -894,8 +899,8 @@ struct CalculatorView: View {
                 Text("Connect a drive or card to plan a copy.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                locPicker("From", $fromID, current: resolvedFrom)
-                locPicker("To", $toID, current: resolvedTo)
+                locPicker("From", $fromID, options: fromLocations, current: resolvedFrom)
+                locPicker("To", $toID, options: toLocations, current: resolvedTo)
 
                 HStack(spacing: 6) {
                     Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
