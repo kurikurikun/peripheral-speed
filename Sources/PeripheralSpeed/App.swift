@@ -122,6 +122,7 @@ struct MenuContent: View {
     @ObservedObject var updates: UpdateChecker
     @State private var startAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showAbout = false
+    @State private var showCalc = false
     @State private var diagCopied = false
 
     /// One top-level USB device plus everything hanging off it.
@@ -497,19 +498,33 @@ struct MenuContent: View {
                     ProgressView().controlSize(.small)
                         .help("Re-checking")
                 }
-                Button {
-                    showAbout.toggle()
-                    diagCopied = false
-                } label: {
-                    Image(systemName: showAbout ? "xmark.circle.fill" : "questionmark.circle")
+                if !showAbout {
+                    Button {
+                        showCalc.toggle()
+                    } label: {
+                        Image(systemName: showCalc ? "xmark.circle.fill" : "timer")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(showCalc ? "Back to the port list" : "Offload time calculator")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help(showAbout ? "Back to the port list" : "About this app")
+                if !showCalc {
+                    Button {
+                        showAbout.toggle()
+                        diagCopied = false
+                    } label: {
+                        Image(systemName: showAbout ? "xmark.circle.fill" : "questionmark.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(showAbout ? "Back to the port list" : "About this app")
+                }
             }
 
             if showAbout {
                 aboutView
+            } else if showCalc {
+                CalculatorView(scanner: scanner)
             } else if scanner.result.usbDevices.isEmpty && scanner.result.tbPorts.isEmpty {
                 Text("Scanning…").foregroundStyle(.secondary)
             } else {
@@ -731,6 +746,106 @@ struct MenuContent: View {
         case .good: return .green
         case .caution: return .yellow
         case .bad: return .red
+        }
+    }
+}
+
+/// "I've got X to copy — where, and how long?" Picks a size, then shows
+/// the offload time onto each connected drive (and empty fast ports),
+/// fastest first. Measured speed wins where a test has run; the link
+/// estimate stands in otherwise.
+struct CalculatorView: View {
+    @ObservedObject var scanner: PeripheralScanner
+    @State private var sizeGB: Double = 256
+
+    private let presets: [Double] = [64, 128, 256, 512, 1024]
+
+    private struct Dest: Identifiable {
+        let id = UUID()
+        let name: String
+        let gbps: Double
+        let measured: Bool
+        let free: Bool   // an empty port rather than a connected drive
+    }
+
+    private func gbps(_ d: USBDevice) -> Double? {
+        if let m = scanner.testResults[d.locationID]?.write, m > 0 { return m }
+        if let mbps = d.speedMbps { return Speed.gbps(linkMbps: mbps) }
+        return nil
+    }
+
+    private var destinations: [Dest] {
+        var out: [Dest] = []
+        for d in scanner.result.usbDevices where d.isStorage && d.bsdName != nil {
+            if let g = gbps(d) {
+                out.append(Dest(name: d.name, gbps: g,
+                                measured: scanner.testResults[d.locationID]?.write != nil,
+                                free: false))
+            }
+        }
+        // A fast empty Thunderbolt/USB-C port is a valid destination too.
+        let hasFreeC = scanner.result.tbPorts.contains { $0.deviceNames.isEmpty }
+        if hasFreeC {
+            out.append(Dest(name: "a fast SSD on a free USB-C port", gbps: 2.5,
+                            measured: false, free: true))
+        }
+        return out.sorted { $0.gbps > $1.gbps }
+    }
+
+    private func sizeLabel(_ gb: Double) -> String {
+        gb >= 1024 ? "1 TB" : "\(Int(gb)) GB"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("How long to offload?").font(.callout.weight(.semibold))
+            Text("Pick how much you shot — see where it copies fastest.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                ForEach(presets, id: \.self) { p in
+                    Button(sizeLabel(p)) { sizeGB = p }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .padding(.vertical, 3).padding(.horizontal, 8)
+                        .background(sizeGB == p ? Color.accentColor : Color.secondary.opacity(0.15),
+                                    in: Capsule())
+                        .foregroundStyle(sizeGB == p ? .white : .primary)
+                }
+            }
+
+            Divider()
+
+            if destinations.isEmpty {
+                Text("Connect a drive to compare offload times.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(destinations.enumerated()), id: \.1.id) { i, dest in
+                    HStack(spacing: 6) {
+                        Image(systemName: i == 0 ? "flag.checkered" : "circle.fill")
+                            .font(i == 0 ? .caption : .system(size: 5))
+                            .foregroundStyle(i == 0 ? Color.green : .secondary)
+                        Text(dest.name).font(.caption)
+                            .lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 6)
+                        Text(Speed.eta(gb: sizeGB, gbPerSec: dest.gbps)
+                                .replacingOccurrences(of: "≈ ", with: ""))
+                            .font(.caption.weight(i == 0 ? .semibold : .regular))
+                            .foregroundStyle(i == 0 ? .primary : .secondary)
+                            .fixedSize()
+                    }
+                    if dest.free || !dest.measured {
+                        Text(dest.free ? "estimate — plug one in to measure"
+                                       : "estimate · run the gauge test for the real speed")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .padding(.leading, 16)
+                    } else {
+                        Text("measured").font(.caption2).foregroundStyle(.green)
+                            .padding(.leading, 16)
+                    }
+                }
+            }
         }
     }
 }
