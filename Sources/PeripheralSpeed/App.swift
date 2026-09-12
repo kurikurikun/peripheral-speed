@@ -775,14 +775,18 @@ struct CalculatorView: View {
         return nil
     }
 
-    /// Drives you can actually copy to right now, fastest first.
+    /// Drives you can actually copy to right now, fastest first. Labeled
+    /// by VOLUME name (what Finder shows and what the copy path uses), so
+    /// the destination you pick matches the folder the command writes to.
     private var destinations: [Dest] {
         var out: [Dest] = []
         for d in scanner.result.usbDevices where d.isStorage && d.bsdName != nil {
             if let g = gbps(d) {
-                out.append(Dest(name: d.name, gbps: g,
+                let path = scanner.mountPaths[d.locationID]
+                let volume = path.map { URL(fileURLWithPath: $0).lastPathComponent }
+                out.append(Dest(name: volume ?? d.name, gbps: g,
                                 measured: scanner.testResults[d.locationID]?.write != nil,
-                                path: scanner.mountPaths[d.locationID]))
+                                path: path))
             }
         }
         return out.sorted { $0.gbps > $1.gbps }
@@ -802,10 +806,14 @@ struct CalculatorView: View {
         return nil
     }
 
-    private func offloadCommand(to destPath: String) -> String {
+    static var today: String {
         let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
+        return df.string(from: Date())
+    }
+
+    private func offloadCommand(to destPath: String) -> String {
         let src = sourcePath ?? "/Volumes/YOUR_CARD"
-        let dst = destPath + "/Offload_" + df.string(from: Date())
+        let dst = destPath + "/Offload_" + Self.today
         return "rsync -ah --info=progress2 \"\(src)/\" \"\(dst)/\" && "
             + "rsync -rcn --info=stats \"\(src)/\" \"\(dst)/\" && "
             + "echo \"✓ verified — all files match by checksum\""
@@ -870,6 +878,11 @@ struct CalculatorView: View {
                         .padding(.leading, 16)
                     // Copy the offload command for THIS drive — pick any.
                     if let path = dest.path {
+                        // Spell out exactly where it lands.
+                        Text("→ copies to \(path)/Offload_\(Self.today)/")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                            .padding(.leading, 16)
                         Button {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(offloadCommand(to: path),
