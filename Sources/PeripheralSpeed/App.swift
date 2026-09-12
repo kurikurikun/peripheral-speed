@@ -766,16 +766,21 @@ struct MenuContent: View {
 struct CalculatorView: View {
     @ObservedObject var scanner: PeripheralScanner
     @State private var sizeGB: Double = 256
-    @State private var copiedDestID: UUID? = nil
+    @State private var fromID: String? = nil
+    @State private var toID: String? = nil
+    @State private var copied = false
 
     private let presets: [Double] = [64, 128, 256, 512, 1024]
 
-    private struct Dest: Identifiable {
-        let id = UUID()
+    /// A place data can move to/from: a mounted drive/card, or a spot on
+    /// the Mac's internal drive. gbps is nil for internal (effectively not
+    /// the bottleneck).
+    private struct Loc: Identifiable, Hashable {
+        let id: String       // the path — unique
         let name: String
-        let gbps: Double
-        let measured: Bool
-        let path: String?   // mounted volume path, for the offload command
+        let path: String
+        let gbps: Double?
+        let internalDrive: Bool
     }
 
     private func gbps(_ d: USBDevice) -> Double? {
@@ -784,35 +789,48 @@ struct CalculatorView: View {
         return nil
     }
 
-    /// Drives you can actually copy to right now, fastest first. Labeled
-    /// by VOLUME name (what Finder shows and what the copy path uses), so
-    /// the destination you pick matches the folder the command writes to.
-    private var destinations: [Dest] {
-        var out: [Dest] = []
+    /// Every source/destination: connected drives & cards (by volume name),
+    /// plus a few Mac-internal spots.
+    private var locations: [Loc] {
+        var out: [Loc] = []
         for d in scanner.result.usbDevices where d.isStorage && d.bsdName != nil {
-            if let g = gbps(d) {
-                let path = scanner.mountPaths[d.locationID]
-                let volume = path.map { URL(fileURLWithPath: $0).lastPathComponent }
-                out.append(Dest(name: volume ?? d.name, gbps: g,
-                                measured: scanner.testResults[d.locationID]?.write != nil,
-                                path: path))
+            if let path = scanner.mountPaths[d.locationID] {
+                let vol = URL(fileURLWithPath: path).lastPathComponent
+                out.append(Loc(id: path, name: vol, path: path,
+                               gbps: gbps(d), internalDrive: false))
             }
         }
-        return out.sorted { $0.gbps > $1.gbps }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for (label, sub) in [("Mac — Movies", "/Movies"),
+                             ("Mac — Desktop", "/Desktop"),
+                             ("Mac — Downloads", "/Downloads")] {
+            out.append(Loc(id: home + sub, name: label, path: home + sub,
+                           gbps: nil, internalDrive: true))
+        }
+        return out
     }
 
-    /// The card you're offloading FROM — the built-in SD card, else a
-    /// card-reader volume. Its mount path seeds the copy command.
-    private var sourcePath: String? {
-        for d in scanner.result.usbDevices
-        where d.isStorage && d.bsdName != nil && d.bus == .builtInSD {
-            if let p = scanner.mountPaths[d.locationID] { return p }
-        }
-        for d in scanner.result.usbDevices
-        where d.isStorage && d.bsdName != nil && d.looksLikeCardReader {
-            if let p = scanner.mountPaths[d.locationID] { return p }
-        }
-        return nil
+    /// Default source: a card, else the first drive. Default dest: the
+    /// fastest OTHER drive, else a Mac-internal spot.
+    private var resolvedFrom: Loc? {
+        if let id = fromID, let l = locations.first(where: { $0.id == id }) { return l }
+        let cards = scanner.result.usbDevices.filter {
+            $0.isStorage && $0.bsdName != nil && ($0.bus == .builtInSD || $0.looksLikeCardReader) }
+        if let c = cards.first, let p = scanner.mountPaths[c.locationID],
+           let l = locations.first(where: { $0.id == p }) { return l }
+        return locations.first { !$0.internalDrive }
+    }
+    private var resolvedTo: Loc? {
+        if let id = toID, let l = locations.first(where: { $0.id == id }) { return l }
+        let others = locations.filter { !$0.internalDrive && $0.id != resolvedFrom?.id }
+            .sorted { ($0.gbps ?? 0) > ($1.gbps ?? 0) }
+        return others.first ?? locations.first { $0.internalDrive }
+    }
+
+    /// The copy is only as fast as its slower end.
+    private var pairGBps: Double? {
+        let speeds = [resolvedFrom?.gbps, resolvedTo?.gbps].compactMap { $0 }
+        return speeds.min() ?? 5.0   // both internal ≈ very fast
     }
 
     static var today: String {
@@ -820,32 +838,43 @@ struct CalculatorView: View {
         return df.string(from: Date())
     }
 
-    private func offloadCommand(to destPath: String) -> String {
-        let src = sourcePath ?? "/Volumes/YOUR_CARD"
-        let dst = destPath + "/Offload_" + Self.today
+    private var destFolder: String? {
+        guard let to = resolvedTo else { return nil }
+        return to.path + "/Offload_" + Self.today
+    }
+
+    private func command() -> String {
+        let src = resolvedFrom?.path ?? "/Volumes/YOUR_CARD"
+        let dst = destFolder ?? "/Volumes/YOUR_DRIVE/Offload_" + Self.today
         return "rsync -ah --info=progress2 \"\(src)/\" \"\(dst)/\" && "
             + "rsync -rcn --info=stats \"\(src)/\" \"\(dst)/\" && "
             + "echo \"✓ verified — all files match by checksum\""
-    }
-
-    /// A free fast port only worth mentioning if a good SSD there would
-    /// beat everything currently connected — the "you could go faster" hint.
-    private var fasterOption: Double? {
-        guard scanner.result.tbPorts.contains(where: { $0.deviceNames.isEmpty }) else { return nil }
-        let bestConnected = destinations.map(\.gbps).max() ?? 0
-        return 2.5 > bestConnected * 1.15 ? 2.5 : nil
     }
 
     private func sizeLabel(_ gb: Double) -> String {
         gb >= 1024 ? "1 TB" : "\(Int(gb)) GB"
     }
 
+    @ViewBuilder
+    private func locPicker(_ title: String, _ selection: Binding<String?>,
+                           current: Loc?) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+                .frame(width: 38, alignment: .leading)
+            Picker("", selection: selection) {
+                ForEach(locations) { loc in
+                    Text(loc.name).tag(loc.id as String?)
+                }
+            }
+            .labelsHidden()
+            .font(.caption)
+            .onAppear { if selection.wrappedValue == nil { selection.wrappedValue = current?.id } }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("How long to offload?").font(.callout.weight(.semibold))
-            Text("Pick how much you shot — see where it copies fastest.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text("How long to copy?").font(.callout.weight(.semibold))
 
             HStack(spacing: 6) {
                 ForEach(presets, id: \.self) { p in
@@ -861,73 +890,47 @@ struct CalculatorView: View {
 
             Divider()
 
-            if destinations.isEmpty {
-                Text("Connect a drive to compare offload times.")
+            if locations.filter({ !$0.internalDrive }).isEmpty {
+                Text("Connect a drive or card to plan a copy.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(Array(destinations.enumerated()), id: \.1.id) { i, dest in
-                    HStack(spacing: 6) {
-                        Image(systemName: i == 0 ? "flag.checkered" : "circle.fill")
-                            .font(i == 0 ? .caption : .system(size: 5))
-                            .foregroundStyle(i == 0 ? Color.green : .secondary)
-                        Text(dest.name).font(.caption)
-                            .lineLimit(1).truncationMode(.tail)
-                        Spacer(minLength: 6)
-                        Text(Speed.eta(gb: sizeGB, gbPerSec: dest.gbps)
-                                .replacingOccurrences(of: "≈ ", with: ""))
-                            .font(.caption.weight(i == 0 ? .semibold : .regular))
-                            .foregroundStyle(i == 0 ? .primary : .secondary)
-                            .fixedSize()
-                    }
-                    Text(dest.measured ? "measured"
-                                       : "estimate · run the gauge for the real speed")
-                        .font(.caption2)
-                        .foregroundStyle(dest.measured ? AnyShapeStyle(.green)
-                                                       : AnyShapeStyle(.tertiary))
-                        .padding(.leading, 16)
-                    // Copy the offload command for THIS drive — pick any.
-                    if let path = dest.path {
-                        // Spell out exactly where it lands.
-                        Text("→ copies to \(path)/Offload_\(Self.today)/")
-                            .font(.caption2).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                            .padding(.leading, 16)
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(offloadCommand(to: path),
-                                                           forType: .string)
-                            copiedDestID = dest.id
-                        } label: {
-                            Label(copiedDestID == dest.id ? "Copied — paste into Terminal"
-                                                          : "Copy offload command",
-                                  systemImage: copiedDestID == dest.id
-                                    ? "checkmark.circle.fill" : "doc.on.doc")
-                        }
-                        .font(.caption2)
-                        .padding(.leading, 16).padding(.top, 1)
-                        .help("rsync copy" + (sourcePath == nil
-                              ? " — edit the source path (no card detected)"
-                              : " from your card")
-                              + " into a dated folder on \(dest.name), then a checksum verify pass. For a re-verifiable manifest, use Stow.")
+                locPicker("From", $fromID, current: resolvedFrom)
+                locPicker("To", $toID, current: resolvedTo)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
+                    Text(Speed.eta(gb: sizeGB, gbPerSec: pairGBps ?? 0))
+                        .font(.callout.weight(.semibold))
+                    if let g = pairGBps {
+                        Text("· ≈ \(Speed.format(g))")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-            }
-            if !destinations.isEmpty {
-                Text("Quick copy via rsync (verified by checksum). For irreplaceable footage with a re-checkable manifest, use a dedicated tool like Stow.")
+                .padding(.top, 2)
+
+                if let folder = destFolder {
+                    Text("→ \(folder)/")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command(), forType: .string)
+                    copied = true
+                } label: {
+                    Label(copied ? "Copied — paste into Terminal" : "Copy command",
+                          systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                }
+                .font(.caption)
+                .padding(.top, 2)
+                .help("A checksum-verified rsync from the source into a dated folder on the destination. The app never touches your files — you run it. For a re-verifiable manifest, use Stow.")
+                .onChange(of: fromID) { _ in copied = false }
+                .onChange(of: toID) { _ in copied = false }
+
+                Text("Verified by checksum (rsync). For irreplaceable footage with a re-checkable manifest, use a dedicated tool like Stow.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let faster = fasterOption {
-                Divider()
-                HStack(spacing: 6) {
-                    Image(systemName: "lightbulb").font(.caption).foregroundStyle(.blue)
-                    Text("A fast SSD on a free USB-C port would do it in "
-                         + Speed.eta(gb: sizeGB, gbPerSec: faster).replacingOccurrences(of: "≈ ", with: "")
-                         + ".")
-                        .font(.caption2).foregroundStyle(.blue)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
         }
     }
