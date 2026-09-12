@@ -16,6 +16,10 @@ It even coaches placement: a drive limited by the hub or display it's plugged in
 - **Bottlenecks, with the fix** — a drive on a bad link goes red with specific advice ("move it to the left port — the right one is USB-2 only", "swap the cable for one marked 10Gbps/SS").
 - **A port database of every Apple Silicon Mac** — including ports macOS can't see while empty (USB-A, the M4 mini's front pair) and asymmetric ones (the MacBook Neo's fast-left / slow-right).
 
+**Plan the offload, too** — pick how much you shot and a source → destination (any connected drive or card, or a folder on your Mac), see how long it'll take, and copy a checksum-verified `rsync` command. The app plans it; you run it, so it never touches your footage.
+
+![Offload time calculator](docs/offload-calculator.png)
+
 Everything updates the instant you plug or unplug something (IOKit notifications — idle CPU ≈ 0%). Updates install themselves: when a new version is out, a one-click **update now** button downloads it, verifies the Developer ID signature, and relaunches.
 
 ## Install
