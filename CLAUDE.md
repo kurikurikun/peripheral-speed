@@ -5,8 +5,9 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 ## Build & run
 
 - `swift run` — dev build (Command Line Tools only, no Xcode project).
+- CLT 27.0 (Sep 2026) ships no `libSwiftUIMacros.dylib`, so `@State` fails to expand and every SwiftUI file errors. Either install Xcode, or build against the older SDK still on disk: `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build` (nothing is lost — deployment target is macOS 13).
 - `./make-app.sh` — assembles PeripheralSpeed.app + `build/PeripheralSpeed-<version>.zip`. Signs with Developer ID + notarizes + staples IF the keychain has a "Developer ID Application" cert and a notarytool profile named `peripheralspeed-notary`; otherwise ad-hoc signs (then installs need the xattr quarantine command). The bundle is staged in /tmp because iCloud-synced folders re-stamp xattrs that strict codesigning rejects.
-- Hidden flag: `PeripheralSpeed --snapshot-about out.png` renders the About view to PNG (docs/screenshots).
+- Hidden flags: `--snapshot-about out.png` and `--snapshot-panel out.png` render those views to PNG (docs/screenshots); `--diagnostic` prints the About panel's fingerprint to stdout.
 
 ## Release ritual
 
@@ -19,6 +20,7 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 
 - `Scanner.swift` — spawns `ioreg`/`system_profiler`/`diskutil`, parses plists. Event-driven: IOKit attach/detach notifications + 60 s fallback timer (never poll faster; idle CPU must stay ~0). Also: eject, measured speed test (F_NOCACHE write/read of a temp file), diagnostic report, BSD-name mapping (walk nested USB devices, credit IOMedia to the INNERMOST device).
 - `Models.swift` — Verdict, Speed (unit rules below), USBDevice/TBPort, PortInventory: per-model port database keyed by hw.model identifier.
+- `Scanner.scanTBStorage` — drives inside Thunderbolt enclosures are NVMe on tunneled PCIe, not USB: found via `ioreg -c IOPCIDevice -k IOPCITunnelRootDeviceModelID` and injected as synthetic USBDevices (bus `.tbPCIe`, locationID `0x7B0000 + FNV(serial)`), same trick as the SD slot. Everything downstream — mount path, capacity, eject, gauge, activity, offload calculator — keys off bsdName/locationID and works for free.
 - `Update.swift` — GitHub releases/latest check, daily.
 - `App.swift` — SwiftUI MenuBarExtra. Row identity MUST derive from hardware (locationID etc.), never UUID-per-scan (breaks tooltips/hover).
 
@@ -37,6 +39,9 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 - Studio Display internals: generic Apple hubs on the tunneled bus, plus a USB device named after the display (camera/speakers) — all hidden from the UI.
 - MacBook Neo (Mac17,5): no Thunderbolt; left port USB3 10 Gb/s, right port USB-2 only. PortInventory.usbCPorts drives per-port labels.
 - Empty ports are invisible to macOS except TB buses — free-port counts come from the model database.
+- Thunderbolt drives are pinned to their port by ID, never by counting: `IOPCITunnelRootDeviceVendorID`/`ModelID` on the drive's PCI node equal the vendor/device IDs `SPThunderboltDataType` prints for that Thunderbolt device (Ash Creek = 8086:0002, Pro Display XDR = 0001:801f, Thunderbolt Display = 0001:8002). The limit: those IDs name the controller silicon, not the box, and no serial crosses the tunnel — two identical enclosures share one key, so `tbDriveAssignment` pairs them off one drive per port.
+- Thunderbolt hands PCIe ~70 % of the raw link (TB3 40 Gb/s → ≈ 2.8 GB/s). Like an SD card's spec ceiling it's an "up to" — the drive inside is often slower, and the gauge is what settles it.
+- Enclosure vendors report Intel's silicon codename ("Ash Creek"), never a product name, so a box holding drives is titled by what it is ("Thunderbolt 3 enclosure") with the reported name in the tooltip. `mode_key` in the XML is a localization key (`thunderbolt_three`), not the string System Information shows.
 - Unknown Macs: the About panel's "Copy diagnostic info" produces the controller fingerprint needed to add a model to PortInventory. Never guess a topology; get the fingerprint.
 
 ## Distribution

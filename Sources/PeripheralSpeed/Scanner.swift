@@ -103,8 +103,32 @@ final class PeripheralScanner: ObservableObject {
         var r = ScanResult()
         r.usbDevices = scanUSB()
         r.tbPorts = scanThunderbolt()
+        r.usbDevices += scanTBStorage(ports: r.tbPorts)
         r.modelId = Self.modelIdentifier()
+        let (caps, mps) = volumes(of: r.usbDevices)
         result = r
+        capacities = caps
+        mountPoints = mps
+        mountPaths = mps
+    }
+
+    /// Mount point and free/total bytes per storage device, keyed by
+    /// locationID — what turns "RTL9210" into the volume name people see in
+    /// Finder, and what the capacity bar and the offload calculator read.
+    private func volumes(of devices: [USBDevice])
+        -> ([Int: (free: Int64, total: Int64)], [Int: String]) {
+        var caps: [Int: (free: Int64, total: Int64)] = [:]
+        var mps: [Int: String] = [:]
+        for d in devices where d.isStorage {
+            guard let bsd = d.bsdName, let mp = mountPoint(forWholeDisk: bsd) else { continue }
+            mps[d.locationID] = mp
+            var fs = statfs()
+            if statfs(mp, &fs) == 0 {
+                caps[d.locationID] = (Int64(fs.f_bavail) * Int64(fs.f_bsize),
+                                      Int64(fs.f_blocks) * Int64(fs.f_bsize))
+            }
+        }
+        return (caps, mps)
     }
 
     func scan() {
@@ -121,18 +145,10 @@ final class PeripheralScanner: ObservableObject {
                 r.usbDevices += self.scanCardReaders()
             }
             r.tbPorts = self.scanThunderbolt()
-            var caps: [Int: (free: Int64, total: Int64)] = [:]
-            var mps: [Int: String] = [:]
-            for d in r.usbDevices where d.isStorage {
-                if let bsd = d.bsdName, let mp = self.mountPoint(forWholeDisk: bsd) {
-                    mps[d.locationID] = mp
-                    var fs = statfs()
-                    if statfs(mp, &fs) == 0 {
-                        caps[d.locationID] = (Int64(fs.f_bavail) * Int64(fs.f_bsize),
-                                              Int64(fs.f_blocks) * Int64(fs.f_bsize))
-                    }
-                }
-            }
+            // Thunderbolt enclosures hold PCIe drives, not USB ones — they
+            // exist only on the PCI side, so they are injected here.
+            r.usbDevices += self.scanTBStorage(ports: r.tbPorts)
+            let (caps, mps) = self.volumes(of: r.usbDevices)
             DispatchQueue.main.async {
                 self.result = r
                 self.scanning = false
@@ -182,7 +198,21 @@ final class PeripheralScanner: ObservableObject {
         lines.append("Thunderbolt buses:")
         for p in result.tbPorts {
             lines.append("  \(p.busName): \(p.speedText.isEmpty ? "-" : p.speedText)"
-                + " devices=[\(p.deviceNames.joined(separator: ", "))]")
+                + " devices=[\(p.deviceNames.joined(separator: ", "))]"
+                + " ids=[\(p.deviceKeys.joined(separator: ", "))]")
+        }
+        // Drives inside Thunderbolt enclosures: the ids tie each one back to
+        // the bus above — the pairing to check first when a drive lands on
+        // the wrong port.
+        let tbDrives = result.usbDevices.filter { $0.bus == .tbPCIe }
+        if !tbDrives.isEmpty {
+            lines.append("")
+            lines.append("Thunderbolt drives (tunneled PCIe):")
+            for d in tbDrives {
+                lines.append("  \(d.name) [\(d.speedLabel)]"
+                    + " bsd=\(d.bsdName ?? "-") via=\(d.tbKey ?? "-")"
+                    + " ceiling=\(Speed.gbCopy(linkMbps: d.speedMbps ?? 0))")
+            }
         }
         // Built-in SD reader (MacBook Pro) keys vary by macOS — capture raw.
         if let arr = runPlist("/usr/sbin/system_profiler",
@@ -640,10 +670,17 @@ final class PeripheralScanner: ObservableObject {
                 }
             }
             var names: [String] = []
+            var keys: [String] = []
+            var mode: String?
             func collect(_ n: [String: Any]) {
+                if mode == nil, let m = n["mode_key"] as? String { mode = m }
                 if let dn = (n["device_name_key"] as? String) ?? (n["_name"] as? String) {
                     let vn = n["vendor_name_key"] as? String
-                    names.append([vn, dn].compactMap { $0 }.joined(separator: " "))
+                    names.append(Self.tbDeviceName(vendor: vn, device: dn))
+                }
+                if let k = Self.tunnelKey(vendor: n["vendor_id_key"],
+                                          device: n["device_id_key"]) {
+                    keys.append(k)
                 }
                 for c in n["_items"] as? [[String: Any]] ?? [] { collect(c) }
             }
@@ -652,9 +689,123 @@ final class PeripheralScanner: ObservableObject {
                 busName: busName,
                 speedText: speedText,
                 deviceNames: names,
-                gbps: Self.parseGbps(speedText)))
+                gbps: Self.parseGbps(speedText),
+                deviceKeys: keys,
+                mode: mode))
         }
         return ports
+    }
+
+    /// Apple's own device names already say the brand ("Pro Display XDR"),
+    /// so the vendor prefix only pushes the useful half of the row out of
+    /// sight — the old "Apple Inc. Thunderbolt Display" truncated to
+    /// nothing. Keep a third-party vendor: on a no-name box it is the only
+    /// recognisable word in the row.
+    static func tbDeviceName(vendor: String?, device: String) -> String {
+        let v = (vendor ?? "").replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        guard !v.isEmpty, !v.localizedCaseInsensitiveContains("apple"),
+              !device.localizedCaseInsensitiveContains(v) else { return device }
+        return v + " " + device
+    }
+
+    /// "8086:0002" from either side of the tunnel: system_profiler reports
+    /// these as hex strings ("0x8086"), IOKit as little-endian data.
+    static func tunnelKey(vendor: Any?, device: Any?) -> String? {
+        guard let v = idValue(vendor), let d = idValue(device) else { return nil }
+        return String(format: "%04x:%04x", v, d)
+    }
+
+    private static func idValue(_ v: Any?) -> Int? {
+        if let n = v as? Int { return n }
+        if let s = v as? String {
+            let hex = s.hasPrefix("0x") || s.hasPrefix("0X") ? String(s.dropFirst(2)) : s
+            return Int(hex, radix: 16)
+        }
+        if let d = v as? Data {
+            return d.prefix(4).enumerated().reduce(0) { $0 | Int($1.element) << (8 * $1.offset) }
+        }
+        return nil
+    }
+
+    // MARK: - Thunderbolt drives (tunneled PCIe, invisible to the USB scan)
+
+    /// A drive in a Thunderbolt enclosure is NVMe over tunneled PCIe — the
+    /// USB registry never sees it, and the Thunderbolt bus report names only
+    /// the enclosure's controller silicon ("Intel Ash Creek"), never the
+    /// drive inside. So find the drives on the PCI side and inject them.
+    ///
+    /// The tunnel carries the identity of the box it came through:
+    /// IOPCITunnelRootDeviceVendorID/ModelID on a tunneled PCI node equal the
+    /// vendor/device IDs system_profiler prints for that Thunderbolt device.
+    /// That pair is what pins a drive to the right port — never infer it by
+    /// counting drives against ports.
+    private func scanTBStorage(ports: [TBPort]) -> [USBDevice] {
+        guard let trees = runPlist("/usr/sbin/ioreg",
+                                   ["-a", "-r", "-c", "IOPCIDevice",
+                                    "-k", "IOPCITunnelRootDeviceModelID", "-l"])
+                as? [[String: Any]] else { return [] }
+        var out: [USBDevice] = []
+        for tree in trees {
+            guard let key = Self.tunnelKey(vendor: tree["IOPCITunnelRootDeviceVendorID"],
+                                           device: tree["IOPCITunnelRootDeviceModelID"])
+            else { continue }
+            var model: String?
+            var serial: String?
+            var bsd: String?
+            func walk(_ n: [String: Any]) {
+                // Storage controllers publish the drive's own identity;
+                // NVMe spells it out, AHCI/SCSI boxes use Device Characteristics.
+                if model == nil {
+                    if let m = n["Model Number"] as? String {
+                        model = m.trimmingCharacters(in: .whitespaces)
+                    } else if let c = n["Device Characteristics"] as? [String: Any],
+                              let m = c["Product Name"] as? String {
+                        model = m.trimmingCharacters(in: .whitespaces)
+                    }
+                }
+                if serial == nil, let sn = n["Serial Number"] as? String { serial = sn }
+                if bsd == nil, n["Whole"] as? Bool == true,
+                   let b = n["BSD Name"] as? String { bsd = b }
+                for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] { walk(c) }
+            }
+            walk(tree)
+            // No whole disk under this tunnel means it is not storage — a
+            // display's USB controller or a dock's ethernet also tunnel PCIe.
+            guard let bsd else { continue }
+            let box = ports.first { $0.deviceKeys.contains(key) }
+            // Named by model, not by volume: the panel swaps in the volume
+            // name from mountPaths like it does for USB drives, and the
+            // diagnostic people paste into issues stays free of the names
+            // they gave their own disks.
+            out.append(USBDevice(
+                name: model ?? "Thunderbolt drive",
+                vendor: nil,
+                speedMbps: Self.tbTunnelMbps(gbps: box?.gbps),
+                speedLabel: [box?.deviceNames.first, model, "PCIe drive over Thunderbolt"]
+                    .compactMap { $0 }.joined(separator: " · "),
+                isStorage: true, isHub: false, depth: 0, bus: .tbPCIe,
+                locationID: 0x7B_0000 + Self.stableTag(serial ?? model ?? bsd),
+                controllerID: -3, bsdName: bsd, tbKey: key))
+        }
+        return out
+    }
+
+    /// Thunderbolt hands PCIe roughly 70 % of the raw link: TB3's 40 Gb/s
+    /// carries ~22 Gb/s of PCIe (≈ 2.8 GB/s), TB2's 20 Gb/s ≈ 1.4 GB/s. Like
+    /// an SD card's spec ceiling this is an "up to" — the drive inside may
+    /// be slower, and the gauge measures which it is.
+    static func tbTunnelMbps(gbps: Double?) -> Double {
+        (gbps ?? 40) * 0.7 * 1_000
+    }
+
+    /// Row identity must come from the hardware, so a drive keeps its row
+    /// (and its measured result) across rescans. FNV-1a over the drive's
+    /// serial — deterministic, unlike Swift's per-process hashing.
+    private static func stableTag(_ s: String) -> Int {
+        var h: UInt32 = 2_166_136_261
+        for b in s.utf8 { h = (h ^ UInt32(b)) &* 16_777_619 }
+        return Int(h & 0xFFFF)
     }
 
     static func parseGbps(_ text: String) -> Double? {

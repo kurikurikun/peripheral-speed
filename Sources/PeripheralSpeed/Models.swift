@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.45"
+    static let version = "0.46"
     static var display: String { "v\(version)" }
 }
 
@@ -50,6 +50,10 @@ enum USBBus {
     /// PCIe, not USB, so it's read separately via SPCardReaderDataType
     /// and injected as a synthetic device.
     case builtInSD
+    /// A drive inside a Thunderbolt enclosure: NVMe on tunneled PCIe, not
+    /// a USB device at all, so the USB scan is blind to it. Found on the
+    /// PCI side and injected as a synthetic device, same as the SD slot.
+    case tbPCIe
 }
 
 /// What ports a given Mac model physically has — macOS can't enumerate
@@ -183,6 +187,9 @@ struct USBDevice: Identifiable {
     /// whole-disk BSD name (e.g. "disk4") when this device currently has
     /// mounted/ejectable media — what `diskutil eject` wants.
     var bsdName: String? = nil
+    /// For a .tbPCIe drive: "vendor:device" of the Thunderbolt box it came
+    /// through (e.g. "8086:0002"), so the row lands on the right port.
+    var tbKey: String? = nil
 
     /// Card readers (SD/CFexpress) legitimately negotiate 5 Gb/s — the
     /// cards themselves are the limit, so no "is your SSD halved?" caution.
@@ -221,6 +228,35 @@ struct TBPort: Identifiable {
     let speedText: String       // e.g. "Up to 40 Gb/s x1", or a status when empty
     let deviceNames: [String]
     let gbps: Double?
+    /// "vendor:device" for every device in this chain, lowercase hex — the
+    /// only reliable way back from a tunneled PCIe drive to the port its
+    /// enclosure is plugged into. Apple reports the same pair on both
+    /// sides: system_profiler's vendor/device IDs here, and
+    /// IOPCITunnelRootDeviceVendorID/ModelID on the drive's PCI node.
+    var deviceKeys: [String] = []
+
+    /// What the box negotiated. system_profiler's XML gives a localization
+    /// key ("thunderbolt_three"), not the text its own window shows.
+    var mode: String? = nil
+
+    /// A display in the chain keeps its own row: a drive daisy-chained
+    /// behind it nests underneath instead of replacing it.
+    var hasDisplay: Bool {
+        deviceNames.contains { $0.localizedCaseInsensitiveContains("display") }
+    }
+
+    /// A box holding a drive is named by what it is. Enclosure vendors
+    /// report the controller silicon's codename — "Intel Ash Creek" names
+    /// nothing anyone can see on their desk, while the drive inside is the
+    /// thing being asked about. The reported name stays in the tooltip.
+    var enclosureLabel: String {
+        let named = ["thunderbolt_one": "Thunderbolt 1",
+                     "thunderbolt_two": "Thunderbolt 2",
+                     "thunderbolt_three": "Thunderbolt 3",
+                     "thunderbolt_four": "Thunderbolt 4",
+                     "usb_four": "USB4", "usb4": "USB4"][mode?.lowercased() ?? ""]
+        return (named ?? "Thunderbolt") + " enclosure"
+    }
 
     /// Thunderbolt 1/2-era Apple displays max out at 10-20 Gb/s by
     /// design — a slow link to one is its nature, not a cable problem.

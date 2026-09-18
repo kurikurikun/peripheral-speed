@@ -14,6 +14,14 @@ struct PeripheralSpeedApp: App {
             Self.snapshotAbout(to: args[i + 1])
             exit(0)
         }
+        // dev/support tool: print the same fingerprint the About panel
+        // copies, without needing the menu bar
+        if args.contains("--diagnostic") {
+            let s = PeripheralScanner()
+            s.scanSync()
+            print(s.diagnosticReport())
+            exit(0)
+        }
         if let i = args.firstIndex(of: "--set-login-item"), i + 1 < args.count {
             // dev/test hook: on | off | status
             switch args[i + 1] {
@@ -41,6 +49,10 @@ struct PeripheralSpeedApp: App {
             Self.snapshotPanel(to: args[i + 1])
             exit(0)
         }
+        if let i = args.firstIndex(of: "--snapshot-calc"), i + 1 < args.count {
+            Self.snapshotCalculator(to: args[i + 1])
+            exit(0)
+        }
         // Start-at-login defaults ON, set exactly once at first launch —
         // the footer checkbox stays in charge afterward, and macOS posts
         // its own "added as login item" notice so nothing is hidden.
@@ -55,6 +67,23 @@ struct PeripheralSpeedApp: App {
         }
         // menu-bar only: no Dock icon, no app switcher entry
         NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
+    /// Render the offload calculator (real scan of this Mac) to a PNG.
+    private static func snapshotCalculator(to path: String) {
+        let scanner = PeripheralScanner()
+        scanner.scanSync()
+        let content = CalculatorView(scanner: scanner)
+            .frame(width: 340)
+            .padding(12)
+            .background(Color(nsColor: .windowBackgroundColor))
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        if let img = renderer.nsImage, let tiff = img.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
     }
 
     /// Render the live panel (real scan of this Mac) to a PNG.
@@ -232,7 +261,38 @@ struct MenuContent: View {
     private var usbABlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .usbA } }
     private var usbCBlocks: [USBBlock] {
         macBlocks.filter { $0.root.bus != .usbA && $0.root.bus != .builtInSD
+            && $0.root.bus != .tbPCIe
             && !companionControllers.contains($0.root.controllerID) }
+    }
+
+    /// Which Thunderbolt drives hang off which port, keyed by port id.
+    ///
+    /// The tunnel identifies the box by vendor:device only — that is the
+    /// controller silicon, so two of the same enclosure report the same pair
+    /// and expose no serial to tell them apart. A key unique to one port
+    /// takes every drive behind it (multi-bay boxes); a key shared by
+    /// several ports is paired off one drive per port, so nothing is shown
+    /// twice or dropped. Worst case, two identical boxes swap port tags.
+    private var tbDriveAssignment: [String: [USBDevice]] {
+        var pool = scanner.result.usbDevices.filter { $0.bus == .tbPCIe }
+        guard !pool.isEmpty else { return [:] }
+        let ports = scanner.result.tbPorts
+        var out: [String: [USBDevice]] = [:]
+        for p in ports {
+            let shared = ports.contains {
+                $0.id != p.id && !Set($0.deviceKeys).isDisjoint(with: Set(p.deviceKeys))
+            }
+            var mine: [USBDevice] = []
+            for d in pool where d.tbKey.map(p.deviceKeys.contains) ?? false {
+                mine.append(d)
+                if shared { break }
+            }
+            guard !mine.isEmpty else { continue }
+            let taken = Set(mine.map(\.id))
+            pool.removeAll { taken.contains($0.id) }
+            out[p.id] = mine
+        }
+        return out
     }
     /// Built-in SDXC slot rows (MacBook Pro) — read off PCIe, not USB.
     private var sdBlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .builtInSD } }
@@ -478,8 +538,10 @@ struct MenuContent: View {
     /// nature, or with nothing better free, gets silence: silence means
     /// "already on the best port".
     private func moveSuggestion(_ d: USBDevice) -> (text: String, color: Color)? {
-        // A card in the built-in SD slot can't be "moved to a Mac port".
-        guard d.bus != .builtInSD else { return nil }
+        // A card in the built-in SD slot can't be "moved to a Mac port",
+        // and a drive in a Thunderbolt enclosure is already on the fastest
+        // port the Mac has — a free USB-C port would be slower.
+        guard d.bus != .builtInSD, d.bus != .tbPCIe else { return nil }
         guard d.isStorage, d.bsdName != nil,   // real inserted media only
               let mbps = d.speedMbps, bestFreeMacMbps > mbps else { return nil }
         if displayDeviceIDs.contains(d.id), let uplink = displayUplinkMbps, mbps >= uplink {
@@ -541,10 +603,21 @@ struct MenuContent: View {
 
                 section(macSectionTitle) {
                     ForEach(scanner.result.tbPorts.filter { !$0.deviceNames.isEmpty }) { p in
+                        let drives = tbDriveAssignment[p.id] ?? []
+                        // A box carrying drives is titled by what it is, and
+                        // the drives nest under it exactly as they do under a
+                        // hub — "USB-C back — <volume>" would have to
+                        // truncate the volume name away to keep the speed.
+                        let boxTitle = drives.isEmpty || p.hasDisplay
+                            ? (p.deviceNames.first ?? "?") : p.enclosureLabel
                         DeviceRow(dot: p.verdict == .good ? .gray : color(p.verdict),
-                                  title: "\(backTag) — \(p.deviceNames.first ?? "?")",
+                                  title: "\(backTag) — \(boxTitle)",
                                   subtitle: tbSubtitle(p),
                                   advice: p.advice)
+                            .help(p.deviceNames.joined(separator: " · "))
+                        ForEach(drives) { d in
+                            deviceRow(d, indent: 1)
+                        }
                     }
                     ForEach(companionExtras) { d in
                         deviceRow(d, indent: 1)
@@ -736,7 +809,7 @@ struct MenuContent: View {
 
     private func tbSubtitle(_ p: TBPort) -> String {
         if p.isLegacyDisplay, let g = p.gbps, g <= 20 {
-            return "older display — ≈ \(Speed.gbCopy(linkMbps: g * 1_000)) is its max"
+            return "max ≈ \(Speed.gbCopy(linkMbps: g * 1_000))"
         }
         guard p.verdict != .good, let g = p.gbps else { return "" }
         return "caps drives at ≈ \(Speed.gbCopy(linkMbps: g * 1_000))"
