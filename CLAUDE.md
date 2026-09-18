@@ -5,7 +5,7 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 ## Build & run
 
 - `swift run` — dev build (Command Line Tools only, no Xcode project).
-- CLT 27.0 (Sep 2026) ships no `libSwiftUIMacros.dylib`, so `@State` fails to expand and every SwiftUI file errors. Either install Xcode, or build against the older SDK still on disk: `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build` (nothing is lost — deployment target is macOS 13).
+- CLT 27.0 (Sep 2026) ships no `libSwiftUIMacros.dylib`, so `@State` fails to expand and every SwiftUI file errors. Either install Xcode, or build against the older SDK still on disk: `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build` (nothing is lost — deployment target is macOS 13). `make-app.sh` handles this itself: it compiles one SwiftUI line as a probe and, if that fails, walks the installed SDKs newest first until one builds.
 - `./make-app.sh` — assembles PeripheralSpeed.app + `build/PeripheralSpeed-<version>.zip`. Signs with Developer ID + notarizes + staples IF the keychain has a "Developer ID Application" cert and a notarytool profile named `peripheralspeed-notary`; otherwise ad-hoc signs (then installs need the xattr quarantine command). The bundle is staged in /tmp because iCloud-synced folders re-stamp xattrs that strict codesigning rejects.
 - Hidden flags: `--snapshot-about out.png` and `--snapshot-panel out.png` render those views to PNG (docs/screenshots); `--diagnostic` prints the About panel's fingerprint to stdout.
 

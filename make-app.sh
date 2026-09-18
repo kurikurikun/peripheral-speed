@@ -5,7 +5,51 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION=$(grep 'static let version' Sources/PeripheralSpeed/Models.swift | sed 's/.*"\(.*\)".*/\1/')
-swift build -c release
+
+# macOS 27's Command Line Tools ship no SwiftUIMacros plugin, so @State never
+# expands and every SwiftUI file fails to compile. Xcode carries the plugin;
+# with CLT only, an older SDK (where @State is still a plain property wrapper)
+# builds fine. Probe rather than hardcode versions: compile one SwiftUI line
+# with the default SDK, and if that fails, walk the installed SDKs newest
+# first until one works. Nothing is lost by an older SDK — the deployment
+# target is macOS 13 and the app uses no post-13 API.
+PROBE=$(mktemp -d /tmp/peripheralspeed-probe.XXXXXX)
+trap 'rm -rf "$PROBE"' EXIT
+cat > "$PROBE/probe.swift" <<'SWIFT'
+import SwiftUI
+struct Probe: View { @State var n = 0; var body: some View { Text("\(n)") } }
+SWIFT
+builds_with() {  # $1 = sdk path, or empty for the default
+    if [ -n "$1" ]; then
+        swiftc -parse-as-library -typecheck -sdk "$1" "$PROBE/probe.swift" >/dev/null 2>&1
+    else
+        swiftc -parse-as-library -typecheck "$PROBE/probe.swift" >/dev/null 2>&1
+    fi
+}
+
+BUILD_SDK=""
+if ! builds_with ""; then
+    for CANDIDATE in $(ls -d "$(xcode-select -p)"/SDKs/MacOSX*.sdk \
+                             /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk \
+                             2>/dev/null | sort -Vr); do
+        if builds_with "$CANDIDATE"; then
+            BUILD_SDK="$CANDIDATE"
+            echo "note: this toolchain cannot expand SwiftUI macros (no Xcode?);"
+            echo "      building against $(basename "$BUILD_SDK") instead"
+            break
+        fi
+    done
+    if [ -z "$BUILD_SDK" ]; then
+        echo "error: no SDK on this Mac can compile SwiftUI — install Xcode." >&2
+        exit 1
+    fi
+fi
+
+if [ -n "$BUILD_SDK" ]; then
+    SDKROOT="$BUILD_SDK" swift build -c release
+else
+    swift build -c release
+fi
 
 # assemble OUTSIDE any iCloud-synced folder: sync daemons re-stamp
 # Finder/FileProvider metadata that strict codesigning rejects
