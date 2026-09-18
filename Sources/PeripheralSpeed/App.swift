@@ -375,6 +375,9 @@ struct MenuContent: View {
     /// A drive's display name: its VOLUME name (what Finder shows) when it
     /// has mounted media, else the device/enclosure name. So "et" rather
     /// than "RTL9210" for a mounted drive — matching the offload path.
+    /// EVERY caller that builds a title itself must route through here:
+    /// a drive plugged straight into a port is a block ROOT, and titling
+    /// roots from .name is what regressed this twice.
     private func displayName(_ d: USBDevice) -> String {
         if d.isStorage, d.bsdName != nil, let path = scanner.mountPaths[d.locationID] {
             return URL(fileURLWithPath: path).lastPathComponent
@@ -625,8 +628,8 @@ struct MenuContent: View {
                     ForEach(usbCRows, id: \.block.id) { row in
                         let extra = row.first ? 0 : 1
                         deviceRow(row.block.root,
-                                  title: row.first ? "\(backTag) — \(row.block.root.name)"
-                                                   : row.block.root.name,
+                                  title: row.first ? "\(backTag) — \(displayName(row.block.root))"
+                                                   : nil,
                                   indent: extra)
                         ForEach(row.block.children) { d in
                             deviceRow(d, indent: d.depth + extra)
@@ -649,7 +652,7 @@ struct MenuContent: View {
 
                     ForEach(frontRows, id: \.d.id) { row in
                         deviceRow(row.d,
-                                  title: row.indent == 0 ? "USB-C front — \(row.d.name)" : nil,
+                                  title: row.indent == 0 ? "USB-C front — \(displayName(row.d))" : nil,
                                   indent: row.indent)
                     }
                     ForEach(0..<freeFrontCount, id: \.self) { _ in
@@ -659,7 +662,7 @@ struct MenuContent: View {
                     }
 
                     ForEach(usbABlocks) { b in
-                        deviceRow(b.root, title: "USB-A — \(b.root.name)")
+                        deviceRow(b.root, title: "USB-A — \(displayName(b.root))")
                         ForEach(b.children) { d in
                             deviceRow(d, indent: d.depth)
                         }
