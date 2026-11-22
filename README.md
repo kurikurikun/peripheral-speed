@@ -10,12 +10,12 @@ It even coaches placement: a drive limited by the hub or display it's plugged in
 
 ## What it shows
 
-- **Your ports, laid out the way you see them on your desk** — the Mac's ports (front/back on M4 minis, left/right on the MacBook Neo, USB-A where present), then your display's ports. Free ports show what a drive plugged there would get.
+- **Your ports, laid out the way you see them on your desk** — the Mac's ports (front/back on M4 minis and the MacBook Neo, USB-A where present), then your display's ports. Free ports show what a drive plugged there would get.
 - **Drives with real numbers** — negotiated copy speed plus an offload estimate ("≈ 1.0 GB/s · 500 GB ≈ 8 min") and a capacity line ("1 TB drive · 487 GB free", warns when nearly full). A ⏏ button ejects safely; a gauge button **measures true write/read speed** with a short uncached test file.
 - **Live copy speed** — open the menu during a transfer and watch it in real time: "Copying right now ≈ 0.8 GB/s". Sampled only while the menu is open, so idle CPU stays ≈ 0.
 - **Thunderbolt drives too** — an NVMe in a Thunderbolt enclosure isn't a USB device at all, so most tools show you the enclosure's chipset codename and nothing else. Here it appears as the drive: volume name, ceiling (≈ 2.8 GB/s on Thunderbolt 3), capacity, eject and gauge, on the port it's actually plugged into.
-- **Bottlenecks, with the fix** — a drive on a bad link goes red with specific advice ("move it to the left port — the right one is USB-2 only", "swap the cable for one marked 10Gbps/SS").
-- **A port database of every Apple Silicon Mac** — including ports macOS can't see while empty (USB-A, the M4 mini's front pair) and asymmetric ones (the MacBook Neo's fast-left / slow-right).
+- **Bottlenecks, with the fix** — a drive on a bad link goes red with specific advice ("move it to the back USB-C port (nearest the screen) — the other one is USB-2 only", "swap the cable for one marked 10Gbps/SS").
+- **A port database of every Apple Silicon Mac** — including ports macOS can't see while empty (USB-A, the M4 mini's front pair) and asymmetric ones (the MacBook Neo's fast back port / USB-2-only front port).
 
 **Plan the offload, too** — pick how much you shot and a source → destination (any connected drive or card, or a folder on your Mac), see how long it'll take, and copy a checksum-verified `rsync` command. The app plans it; you run it, so it never touches your footage.
 

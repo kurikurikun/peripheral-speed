@@ -3,7 +3,7 @@ import Foundation
 /// Bump on every release the family might install. Shown in the menu
 /// header and the shared zip name.
 enum AppInfo {
-    static let version = "0.47"
+    static let version = "0.48"
     static var display: String { "v\(version)" }
 }
 
@@ -80,11 +80,21 @@ struct PortInventory {
     /// Built-in SDXC card slot (MacBook Pro 14″/16″). PCIe, so the app
     /// reads it via SPCardReaderDataType rather than the USB tree.
     var hasSDSlot: Bool = false
+    /// Port-hop chain of an internal Apple hub that fans out the USB 2
+    /// wires of several ports (MacBook Neo: [1]). Plumbing — never shown.
+    var internalUSB2HubPath: [Int]? = nil
 }
 
 struct USBCPort {
-    let label: String     // physical position, e.g. "left"
+    let label: String     // physical position, e.g. "back"
     let linkMbps: Double
+    /// Where to find it, for advice text ("nearest the screen").
+    var hint: String? = nil
+    /// Port-hop chains (see USBDevice.locationID) that land on this
+    /// physical port. A USB 3 port has two: its fast wires and its slow
+    /// wires enumerate separately. Empty = not mapped; fall back to the
+    /// speed-based guess.
+    var paths: [[Int]] = []
 }
 
 extension PortInventory {
@@ -103,12 +113,21 @@ extension PortInventory {
         add(["Mac17,3"], .init(marketingName: "MacBook Air 13″ (M5)", usbC: 2, usbA: 0, usbAGbps: 0))
         add(["Mac17,4"], .init(marketingName: "MacBook Air 15″ (M5)", usbC: 2, usbA: 0, usbAGbps: 0))
 
-        // MacBook Neo — no Thunderbolt; the two ports are NOT equal
-        // (Apple tech specs: left = USB 3 10 Gb/s, right = USB 2 480 Mb/s)
+        // MacBook Neo — no Thunderbolt; the two ports are NOT equal.
+        // Field-verified Nov 2026 with a USB 3 hub in each port: one xHCI
+        // serves both. Back port (nearest the screen) = USB 3 10 Gb/s, its
+        // fast wires on root port 2, its slow wires on port 2 of an internal
+        // Apple USB2 hub at root port 1. Front port = USB 2 only, internal
+        // hub port 1. The internal hub enumerates only while a port is in
+        // use, with a fresh container ID each time.
         add(["Mac17,5"], .init(marketingName: "MacBook Neo", usbC: 2, usbA: 0, usbAGbps: 0,
             hasThunderbolt: false,
-            usbCPorts: [USBCPort(label: "left", linkMbps: 10_000),
-                        USBCPort(label: "right", linkMbps: 480)]))
+            usbCPorts: [USBCPort(label: "back", linkMbps: 10_000,
+                                 hint: "back USB-C port (nearest the screen)",
+                                 paths: [[2], [1, 2]]),
+                        USBCPort(label: "front", linkMbps: 480,
+                                 hint: "front USB-C port", paths: [[1, 1]])],
+            internalUSB2HubPath: [1]))
 
         // MacBook Pro
         add(["MacBookPro17,1"], .init(marketingName: "MacBook Pro 13″ (M1)", usbC: 2, usbA: 0, usbAGbps: 0))
@@ -190,6 +209,14 @@ struct USBDevice: Identifiable {
     /// For a .tbPCIe drive: "vendor:device" of the Thunderbolt box it came
     /// through (e.g. "8086:0002"), so the row lands on the right port.
     var tbKey: String? = nil
+    /// kUSBContainerID: shared by every USB function of one physical
+    /// product — a USB 3 hub's slow and fast halves and its own controller
+    /// chip all report the same one.
+    var containerID: String? = nil
+    /// The product's own name when a sibling function carries it — a
+    /// hub's billboard chip says "Anker USB-C Hub Device" while the hub
+    /// itself only says "USB3.0 Hub".
+    var productName: String? = nil
 
     /// Card readers (SD/CFexpress) legitimately negotiate 5 Gb/s — the
     /// cards themselves are the limit, so no "is your SSD halved?" caution.

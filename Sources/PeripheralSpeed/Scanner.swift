@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import IOKit
 
 /// Reads USB devices from the IOKit registry (via ioreg) and Thunderbolt
@@ -85,6 +85,15 @@ final class PeripheralScanner: ObservableObject {
                 var obj = IOIteratorNext(iter)
                 while obj != 0 { IOObjectRelease(obj); obj = IOIteratorNext(iter) }
                 iterators.append(iter)
+            }
+        }
+        // A drive's USB device appears a second or two before its volume
+        // mounts, so the attach-time scan sees "no disk inserted". Mounts
+        // and unmounts are events of their own — rescan on those too.
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.deviceEvent()
             }
         }
     }
@@ -566,6 +575,7 @@ final class PeripheralScanner: ObservableObject {
         let storageLocs = storageLocations()
         let disks = bsdNames()
         var devices: [USBDevice] = []
+        var billboardNames: [String: String] = [:]   // containerID -> name
 
         func isDevice(_ n: [String: Any]) -> Bool {
             n["USBSpeed"] != nil || n["Device Speed"] != nil
@@ -596,6 +606,10 @@ final class PeripheralScanner: ObservableObject {
             // negotiation artifacts, not real peripherals — skip entirely.
             let isBillboard = (n["bDeviceClass"] as? Int == 0x11)
                 || rawName.localizedCaseInsensitiveContains("billboard")
+            if isBillboard, let c = n["kUSBContainerID"] as? String,
+               !rawName.localizedCaseInsensitiveContains("billboard") {
+                billboardNames[c] = billboardNames[c] ?? rawName
+            }
             if let speed, !isBillboard {
                 let name = rawName
                 let loc = n["locationID"] as? Int
@@ -613,7 +627,8 @@ final class PeripheralScanner: ObservableObject {
                     bus: bus,
                     locationID: loc ?? 0,
                     controllerID: controller,
-                    bsdName: storage ? loc.flatMap { disks[$0] } : nil))
+                    bsdName: storage ? loc.flatMap { disks[$0] } : nil,
+                    containerID: n["kUSBContainerID"] as? String))
                 childDepth = depth + 1
             }
             for c in n["IORegistryEntryChildren"] as? [[String: Any]] ?? [] {
@@ -626,6 +641,11 @@ final class PeripheralScanner: ObservableObject {
         for (i, c) in controllers.enumerated() {
             let cls = (c["IOObjectClass"] as? String) ?? ""
             visit(c, depth: 0, bus: Self.busKind(cls), controller: i)
+        }
+        for i in devices.indices {
+            if let c = devices[i].containerID, let n = billboardNames[c] {
+                devices[i].productName = n.hasSuffix(" Device") ? String(n.dropLast(7)) : n
+            }
         }
         return devices
     }

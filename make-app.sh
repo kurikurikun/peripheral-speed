@@ -45,10 +45,15 @@ if ! builds_with ""; then
     fi
 fi
 
+# keep SwiftPM's build cache OUTSIDE iCloud: a synced .build arrives from
+# another Mac as cloud-only placeholders, and the compiler stalls for ages
+# downloading thousands of files it would rebuild anyway. Each Mac gets its
+# own local cache; the first build there just takes a minute longer.
+SCRATCH="$HOME/Library/Caches/PeripheralSpeed/build"
 if [ -n "$BUILD_SDK" ]; then
-    SDKROOT="$BUILD_SDK" swift build -c release
+    SDKROOT="$BUILD_SDK" swift build -c release --scratch-path "$SCRATCH"
 else
-    swift build -c release
+    swift build -c release --scratch-path "$SCRATCH"
 fi
 
 # assemble OUTSIDE any iCloud-synced folder: sync daemons re-stamp
@@ -57,7 +62,7 @@ STAGE=$(mktemp -d /tmp/peripheralspeed-build.XXXXXX)
 APP="$STAGE/PeripheralSpeed.app"
 rm -rf build
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/PeripheralSpeed "$APP/Contents/MacOS/"
+cp "$SCRATCH/release/PeripheralSpeed" "$APP/Contents/MacOS/"
 cp Icon/AppIcon.icns "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

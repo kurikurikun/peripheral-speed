@@ -297,6 +297,117 @@ struct MenuContent: View {
     /// Built-in SDXC slot rows (MacBook Pro) — read off PCIe, not USB.
     private var sdBlocks: [USBBlock] { macBlocks.filter { $0.root.bus == .builtInSD } }
 
+    // MARK: mapped ports (MacBook Neo)
+
+    /// Ports whose wiring is known by port-hop chain (PortInventory paths).
+    /// Then "one controller == one port" doesn't apply: every device is
+    /// placed on its physical port by its locationID instead.
+    private var mappedPorts: [USBCPort]? {
+        guard let ports = scanner.result.inventory?.usbCPorts,
+              !ports.isEmpty, ports.allSatisfy({ !$0.paths.isEmpty }) else { return nil }
+        return ports
+    }
+
+    private func isInternalUSB2Hub(_ d: USBDevice) -> Bool {
+        guard let path = scanner.result.inventory?.internalUSB2HubPath,
+              d.bus == .usbC, d.isHub else { return false }
+        return portChain(d.locationID) == path
+    }
+
+    /// (port index, hops below that port) — longest matching path wins.
+    private func placement(_ d: USBDevice, in ports: [USBCPort]) -> (port: Int, tail: [Int])? {
+        let chain = portChain(d.locationID)
+        var best: (port: Int, tail: [Int], len: Int)?
+        for (i, p) in ports.enumerated() {
+            for path in p.paths where chain.starts(with: path) && path.count > (best?.len ?? -1) {
+                best = (i, Array(chain.dropFirst(path.count)), path.count)
+            }
+        }
+        return best.map { ($0.port, $0.tail) }
+    }
+
+    private struct PortRow: Identifiable {
+        let d: USBDevice
+        let title: String?
+        let indent: Int
+        var id: String { d.id }
+    }
+
+    /// Hub chipsets call themselves "USB2.0 Hub" / "USB3.0 Hub" — that's
+    /// the plane, not the product, and it read as "your hub is USB 2".
+    private func isGenericHubName(_ name: String) -> Bool {
+        let n = name.lowercased().replacingOccurrences(of: " ", with: "")
+        return n.hasPrefix("usb") && n.hasSuffix("hub") && n.count <= 14
+    }
+
+    /// One physical product = one row. A USB 3 hub's slow and fast halves
+    /// share a container ID (keep the faster); so does the hub's own
+    /// controller chip ("Anker USB-C Hub Device"), which lends the row its
+    /// real name and is otherwise hidden.
+    private func rows(onPort tagged: [(d: USBDevice, tail: [Int])], label: String) -> [PortRow] {
+        var items = tagged
+        let hubContainers = Set(items.filter(\.d.isHub).compactMap(\.d.containerID))
+        let chips = items.filter {
+            !$0.d.isHub && !$0.d.isStorage && $0.d.containerID.map(hubContainers.contains) == true
+        }
+        let chipName: [String: String] = Dictionary(
+            chips.compactMap { c in c.d.containerID.map { ($0, c.d.name) } },
+            uniquingKeysWith: { a, _ in a })
+        items.removeAll { x in chips.contains { $0.d.id == x.d.id } }
+
+        var merged: [(d: USBDevice, tail: [Int])] = []
+        for x in items {
+            if let c = x.d.containerID,
+               let j = merged.firstIndex(where: { $0.tail == x.tail && $0.d.containerID == c }) {
+                if (x.d.speedMbps ?? 0) > (merged[j].d.speedMbps ?? 0) { merged[j] = x }
+            } else {
+                merged.append(x)
+            }
+        }
+        merged.sort { $0.tail.lexicographicallyPrecedes($1.tail) }
+
+        return merged.map { x in
+            var name = displayName(x.d)
+            if x.d.isHub {
+                if let product = x.d.productName {
+                    name = product
+                } else if let chip = x.d.containerID.flatMap({ chipName[$0] }) {
+                    name = chip.hasSuffix(" Device") ? String(chip.dropLast(7)) : chip
+                } else if isGenericHubName(x.d.name) {
+                    name = "USB hub"
+                }
+            }
+            let top = x.tail.isEmpty
+            let custom = top || name != displayName(x.d)
+            return PortRow(d: x.d,
+                           title: custom ? (top ? "USB-C \(label) — \(name)" : name) : nil,
+                           indent: x.tail.count)
+        }
+    }
+
+    /// Port index -> its rows, for every occupied mapped port.
+    private var mappedPortRows: [Int: [PortRow]] {
+        guard let ports = mappedPorts else { return [:] }
+        var byPort: [Int: [(d: USBDevice, tail: [Int])]] = [:]
+        for d in scanner.result.usbDevices where d.bus == .usbC && !isInternalUSB2Hub(d) {
+            if let p = placement(d, in: ports) { byPort[p.port, default: []].append((d, p.tail)) }
+        }
+        var out: [Int: [PortRow]] = [:]
+        for (port, items) in byPort { out[port] = rows(onPort: items, label: ports[port].label) }
+        return out
+    }
+
+    private var mappedRowsFlat: [PortRow] {
+        let m = mappedPortRows
+        return m.keys.sorted().flatMap { m[$0]! }
+    }
+
+    private var freeMappedPorts: [USBCPort] {
+        guard let ports = mappedPorts else { return [] }
+        let used = Set(mappedPortRows.keys)
+        return ports.enumerated().filter { !used.contains($0.offset) }.map(\.element)
+    }
+
     /// Devices sharing a controller share a physical USB-C port — show the
     /// first as the port, nest the rest under it.
     private var usbCRows: [(block: USBBlock, first: Bool)] {
@@ -353,12 +464,13 @@ struct MenuContent: View {
         guard let inv = scanner.result.inventory,
               let ports = inv.usbCPorts, !inv.hasThunderbolt else { return nil }
         var pool = ports.sorted { $0.linkMbps > $1.linkMbps }
+        if mappedPorts != nil { pool = freeMappedPorts }
         let occupiedSpeeds = Dictionary(grouping: usbCBlocks.filter { $0.root.bus == .usbC },
                                         by: \.root.controllerID)
             .values.map { blocks in
                 blocks.flatMap { [$0.root] + $0.children }.compactMap(\.speedMbps).max() ?? 0
             }
-        for speed in occupiedSpeeds.sorted(by: >) where !pool.isEmpty {
+        for speed in occupiedSpeeds.sorted(by: >) where !pool.isEmpty && mappedPorts == nil {
             if speed > 480, let i = pool.firstIndex(where: { $0.linkMbps > 480 }) {
                 pool.remove(at: i)
             } else {
@@ -449,10 +561,19 @@ struct MenuContent: View {
     /// Model-aware upgrade of a drive's advice: on a Neo a USB-2-speed
     /// drive is most likely just in the wrong port.
     private func adviceFor(_ d: USBDevice) -> String? {
+        // On a mapped port we know the port's own speed, so a drive held
+        // back by the hub in between gets told exactly that.
+        if d.isStorage, d.bsdName != nil, d.verdict != .good, let ports = mappedPorts,
+           let mbps = d.speedMbps, let hub = parentHubSpeed(of: d), mbps >= hub,
+           let p = placement(d, in: ports), !p.tail.isEmpty,
+           ports[p.port].linkMbps > mbps {
+            let port = ports[p.port]
+            return "Running at ≈ \(Speed.gbCopy(linkMbps: mbps)) — this hub tops out there. Plug the drive straight into the \(port.hint ?? "\(port.label) port") for up to ≈ \(Speed.gbCopy(linkMbps: port.linkMbps))."
+        }
         if d.isStorage, d.verdict == .bad, d.bus == .usbC,
            let ports = scanner.result.inventory?.usbCPorts,
            let fast = ports.max(by: { $0.linkMbps < $1.linkMbps }) {
-            return "Stuck at ≈ 0.05 GB/s. Move it to the \(fast.label) port — the other one is USB-2 only. If it's already there, swap the cable."
+            return "Stuck at ≈ 0.05 GB/s. Move it to the \(fast.hint ?? "\(fast.label) port") — the other one is USB-2 only. If it's already there, swap the cable."
         }
         return d.advice
     }
@@ -516,6 +637,7 @@ struct MenuContent: View {
     /// What a USB drive would negotiate on the best FREE Mac port right
     /// now (USB mode: 10 Gb/s on any free USB-C; USB-A per model).
     private var bestFreeMacMbps: Double {
+        if mappedPorts != nil { return freeMappedPorts.map(\.linkMbps).max() ?? 0 }
         if freeUSBCCount > 0 || freeFrontCount > 0 { return 10_000 }
         if freeUSBACount > 0 { return Double(scanner.result.inventory?.usbAGbps ?? 5) * 1_000 }
         return 0
@@ -625,6 +747,11 @@ struct MenuContent: View {
                     ForEach(companionExtras) { d in
                         deviceRow(d, indent: 1)
                     }
+                    if mappedPorts != nil {
+                        ForEach(mappedRowsFlat) { row in
+                            deviceRow(row.d, title: row.title, indent: row.indent)
+                        }
+                    } else {
                     ForEach(usbCRows, id: \.block.id) { row in
                         let extra = row.first ? 0 : 1
                         deviceRow(row.block.root,
@@ -634,6 +761,7 @@ struct MenuContent: View {
                         ForEach(row.block.children) { d in
                             deviceRow(d, indent: d.depth + extra)
                         }
+                    }
                     }
                     if let portRows = freeUSBCPortRows {
                         ForEach(portRows, id: \.title) { row in
@@ -1107,6 +1235,7 @@ struct DeviceRow: View {
                 if indent > 0 {
                     Text("└")
                         .font(.caption).foregroundStyle(.tertiary)
+                        .fixedSize()   // a long drive name must not squeeze the tree line away
                         .padding(.leading, CGFloat(indent) * 14)
                 }
                 Circle().fill(dot).frame(width: 8, height: 8)
