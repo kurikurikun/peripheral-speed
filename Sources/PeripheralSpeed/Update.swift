@@ -1,31 +1,49 @@
 import Foundation
+import AppKit
 import Security
+import os
 
-/// Checks GitHub Releases for a newer version — on launch and once a day.
-/// Public API, no auth, fails silently offline.
+/// Checks GitHub Releases for a newer version — whenever the menu opens,
+/// plus hourly. Public API, no auth, fails silently offline.
 final class UpdateChecker: ObservableObject {
     @Published var latest: (version: String, url: String)?
     @Published var updating = false
     @Published var updateError: String?
 
     private var timer: Timer?
+    private var keyObserver: NSObjectProtocol?
+    private var lastCheck = Date.distantPast
+    private static let log = Logger(subsystem: "co.move-ment.peripheralspeed", category: "update")
     private static let releasesAPI =
         "https://api.github.com/repos/kurikurikun/peripheral-speed/releases/latest"
 
-    /// Called on every menu open: always re-check (one tiny API call) so
-    /// a new release shows up the next time the user looks, not a day
-    /// later. The timer only backs this up for menus that never close.
+    /// Re-check every time the menu opens, so a new release shows up the
+    /// next time the user looks. SwiftUI's MenuBarExtra(.window) keeps its
+    /// panel alive and fires `.onAppear` only on the FIRST open, so we hook
+    /// the panel becoming key instead (this LSUIElement app has no other
+    /// windows that matter). Throttled so rapid open/close can't burn the
+    /// unauthenticated 60-requests/hour API limit.
     func start() {
         check()
+        if keyObserver == nil {
+            keyObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+            ) { [weak self] _ in self?.check() }
+        }
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             self?.check()
         }
     }
 
     func check() {
+        guard Date().timeIntervalSince(lastCheck) > 30 else { return }
+        lastCheck = Date()
         guard let url = URL(string: Self.releasesAPI) else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        Self.log.info("checking for updates")
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             guard let data,
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = obj["tag_name"] as? String,

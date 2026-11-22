@@ -14,7 +14,7 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 
 1. Bump `AppInfo.version` in `Sources/PeripheralSpeed/Models.swift` (single source of truth; shown in the panel header).
 2. Commit, push, `./make-app.sh`, `git tag vX.Y && git push origin vX.Y`.
-3. Create a GitHub Release for the tag and attach the zip TWICE: the versioned name AND a copy named exactly `PeripheralSpeed.zip` — the move-ment.co/peripheral-speed download button uses `releases/latest/download/PeripheralSpeed.zip`, which needs that stable asset name on every release. The app checks `releases/latest` daily and shows a download row to older versions — so a GitHub Release IS the update announcement.
+3. Create a GitHub Release for the tag and attach the zip TWICE: the versioned name AND a copy named exactly `PeripheralSpeed.zip` — the move-ment.co/peripheral-speed download button uses `releases/latest/download/PeripheralSpeed.zip`, which needs that stable asset name on every release. The app checks `releases/latest` on every menu open and shows an update button to older versions — so a GitHub Release IS the update announcement.
 4. Notarized releases currently only from Chris's M1 Mac mini (cert + notary profile in its keychain, Team ID PNDN4CQY5T).
 
 ## Architecture (Sources/PeripheralSpeed/)
@@ -22,7 +22,7 @@ Menu-bar app (⚡) answering: how fast can data actually copy through this Mac's
 - `Scanner.swift` — spawns `ioreg`/`system_profiler`/`diskutil`, parses plists. Event-driven: IOKit attach/detach notifications + 60 s fallback timer (never poll faster; idle CPU must stay ~0). Also: eject, measured speed test (F_NOCACHE write/read of a temp file), diagnostic report, BSD-name mapping (walk nested USB devices, credit IOMedia to the INNERMOST device).
 - `Models.swift` — Verdict, Speed (unit rules below), USBDevice/TBPort, PortInventory: per-model port database keyed by hw.model identifier.
 - `Scanner.scanTBStorage` — drives inside Thunderbolt enclosures are NVMe on tunneled PCIe, not USB: found via `ioreg -c IOPCIDevice -k IOPCITunnelRootDeviceModelID` and injected as synthetic USBDevices (bus `.tbPCIe`, locationID `0x7B0000 + FNV(serial)`), same trick as the SD slot. Everything downstream — mount path, capacity, eject, gauge, activity, offload calculator — keys off bsdName/locationID and works for free.
-- `Update.swift` — GitHub releases/latest check, daily.
+- `Update.swift` — GitHub releases/latest check on every menu open (hooked to the panel becoming key: `MenuBarExtra(.window)` fires `.onAppear` only on the first open), throttled to 30 s, plus hourly.
 - `App.swift` — SwiftUI MenuBarExtra. Row identity MUST derive from hardware (locationID etc.), never UUID-per-scan (breaks tooltips/hover).
 
 ## Design rules the owner converged on (do not regress)
